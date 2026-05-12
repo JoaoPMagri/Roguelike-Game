@@ -1,264 +1,76 @@
 import random
 
-from maps_generator.BSP import BSP
-from maps_generator.CellularAutomata import CellularAutomata
-from maps_generator.RandomWalk import RandomWalk
-
-
-class MixedGenerator:
-
-    def __init__(
-        self,
-        width,
-        height,
-        seed,
-        min_leaf_size=10,
-        min_room_size=4,
-        generators = None
-    ):
-
+class MapGenerator:
+    def __init__(self,width,height,seed):
         self.width = width
         self.height = height
-
-        self.seed = seed
-
-        self.min_leaf_size = min_leaf_size
-        self.min_room_size = min_room_size
-
         self.rng = random.Random(seed)
+        self.connection_point = None
+        self.world_x = 0
+        self.world_y = 0
 
         self.grid = [
             ['#' for _ in range(width)]
             for _ in range(height)
         ]
+    
+    def get_floors(self):
+        floors = set()
+        for y in range(self.height):
+            for x in range(self.width):
+                if self.grid[y][x] == '.':
+                    floors.add((x,y))
+        
+        return floors
+    
+    def get_neighbors(self,x,y):
+        neighbors = set()
 
-        self.corridors_grid = [
-            ['#' for _ in range(width)]
-            for _ in range(height)
+        directions = [
+            (-1,1),
+            (1,-1),
+            (-1,-1),
+            (1, 1),
+            (0, -1),
+            (0, 1),
+            (-1, 0),
+            (1, 0)
         ]
 
-        # BSP será usado como estrutura
-        self.bsp = BSP(
-            width=width,
-            height=height,
-            seed=seed,
-            min_leaf_size=min_leaf_size,
-            min_room_size=min_room_size
-        )
+        for dx, dy in directions:
 
-        if generators is None:
+            nx = x + dx
+            ny = y + dy
 
-            self.generators = [
-                "BSP_ROOM",
-                "CELLULAR",
-                "RANDOM_WALK",
-                "MIXED_CA_RW"
-            ]
-
-        else:
-            self.generators = generators
-
-    # ============================================================
-    # COPY LOCAL GRID TO GLOBAL GRID
-    # ============================================================
-
-    def copy_generator_to_leaf(self, generator, leaf):
-
-        for x, y in generator.floor_tiles:
-
-            global_x = x + leaf.x
-            global_y = y + leaf.y
-
-            # segurança
             if (
-                0 <= global_x < self.width and
-                0 <= global_y < self.height
+                0 <= nx < self.width and
+                0 <= ny < self.height
             ):
-                self.grid[global_y][global_x] = '.'
 
-    # ============================================================
-    # ASSIGN GENERATOR TO LEAF
-    # ============================================================
+                neighbors.add((nx, ny))
 
-    def generate_leaf_content(self, leaf):
+        return neighbors
+    
+    def get_walls(self):
+        walls = set()
 
-        generator_type = self.rng.choice(self.generators)
+        floors = self.get_floors()
 
-        # --------------------------------------------------------
-        # BSP ROOM
-        # --------------------------------------------------------
+        for x,y in floors:
+            neighbors = MapGenerator.get_neighbors(self,x,y)
+            for x2,y2 in neighbors:
+                if (x2,y2) in walls:
+                    continue
+                elif self.grid[y2][x2] == '#':
+                    walls.add((x2,y2))
+        
+        return walls
 
-        if generator_type == "BSP_ROOM":
 
-            temp_bsp = BSP(
-                width=leaf.width,
-                height=leaf.height,
-                seed=self.rng.random(),
-                min_leaf_size=leaf.width,
-                min_room_size=max(
-                    3,
-                    self.min_room_size
-                )
-            )
-
-            temp_bsp.generate_bsp_room(
-                type(
-                    "TempLeaf",
-                    (),
-                    {
-                        "x": 0,
-                        "y": 0,
-                        "width": leaf.width,
-                        "height": leaf.height,
-                        "room": None,
-                        "floor_tiles": [],
-                        "connection_point": None
-                    }
-                )()
-            )
-
-            # copia floors
-            for y in range(leaf.height):
-
-                for x in range(leaf.width):
-
-                    if temp_bsp.grid[y][x] == '.':
-                        self.grid[y + leaf.y][x + leaf.x] = '.'
-
-            # pega ponto central
-            floors = []
-
-            for y in range(leaf.height):
-                for x in range(leaf.width):
-
-                    if temp_bsp.grid[y][x] == '.':
-                        floors.append((x, y))
-
-            if floors:
-
-                px, py = self.rng.choice(floors)
-
-                leaf.connection_point = (
-                    px + leaf.x,
-                    py + leaf.y
-                )
-
-        # --------------------------------------------------------
-        # CELLULAR AUTOMATA
-        # --------------------------------------------------------
-
-        elif generator_type == "CELLULAR":
-
-            gen = CellularAutomata(
-                width=leaf.width,
-                height=leaf.height,
-                iterations=6,
-                density=0.5,
-                seed=self.rng.random()
-            )
-
-            gen.generate()
-
-            self.copy_generator_to_leaf(gen, leaf)
-
-            if gen.connection_point:
-
-                px, py = gen.connection_point
-
-                leaf.connection_point = (
-                    px + leaf.x,
-                    py + leaf.y
-                )
-
-        # --------------------------------------------------------
-        # RANDOM WALK
-        # --------------------------------------------------------
-
-        elif generator_type == "RANDOM_WALK":
-
-            gen = RandomWalk(
-                width=leaf.width,
-                height=leaf.height,
-                iterations=(
-                    leaf.width *
-                    leaf.height
-                ) * 2 // 3,
-                seed=self.rng.random()
-            )
-
-            gen.generate()
-
-            self.copy_generator_to_leaf(gen, leaf)
-
-            if gen.connection_point:
-
-                px, py = gen.connection_point
-
-                leaf.connection_point = (
-                    px + leaf.x,
-                    py + leaf.y
-                )
-
-        # --------------------------------------------------------
-        # RANDOM WALK + CELLULAR
-        # --------------------------------------------------------
-
-        elif generator_type == "MIXED_CA_RW":
-
-            rw = RandomWalk(
-                width=leaf.width,
-                height=leaf.height,
-                iterations=(
-                    leaf.width *
-                    leaf.height
-                ) * 3 // 4,
-                seed=self.rng.random()
-            )
-
-            rw.generate()
-
-            ca = CellularAutomata(
-                width=leaf.width,
-                height=leaf.height,
-                iterations=3,
-                density=0.45,
-                seed=self.rng.random()
-            )
-
-            # usa resultado do RW
-            ca.grid = [row[:] for row in rw.grid]
-
-            ca.make_iterations()
-
-            ca.find_floor_tiles()
-
-            ca.choose_connection_point()
-
-            self.copy_generator_to_leaf(ca, leaf)
-
-            if ca.connection_point:
-
-                px, py = ca.connection_point
-
-                leaf.connection_point = (
-                    px + leaf.x,
-                    py + leaf.y
-                )
-
-    # ============================================================
-    # GENERATE ALL LEAF CONTENTS
-    # ============================================================
-
-    def generate_regions(self):
-
-        for leaf in self.bsp.leaves:
-
-            self.generate_leaf_content(leaf)
-
-    # ============================================================
-    # CORRIDORS
-    # ============================================================
-
+    def choose_conection_point(self):
+        floors = list(self.get_floors())
+        self.connection_point =  self.rng.choice(floors)
+    
     def carve_h(self, x1, x2, y):
 
         for x in range(
@@ -267,7 +79,6 @@ class MixedGenerator:
         ):
 
             self.grid[y][x] = '.'
-            self.corridors_grid[y][x]= '.'
 
     def carve_v(self, y1, y2, x):
 
@@ -277,8 +88,7 @@ class MixedGenerator:
         ):
 
             self.grid[y][x] = '.'
-            self.corridors_grid[y][x]= '.'
-
+    
     def connect_points(self, p1, p2):
 
         x1, y1 = p1
@@ -295,122 +105,51 @@ class MixedGenerator:
             self.carve_v(y1, y2, x1)
 
             self.carve_h(x1, x2, y2)
+    
+    def join_maps(self,maps):
 
-    # ============================================================
-    # TREE CONNECTION
-    # ============================================================
+        current_x = 0
+        current_y = 0
 
-    def get_connection_point(self, leaf):
-
-        # leaf válida
-        if leaf.connection_point is not None:
-            return leaf.connection_point
-
+        row_height = 0
         points = []
+        for submap in maps:
 
-        # filho esquerdo
-        if leaf.left_child:
+            # quebra linha se não couber
+            if current_x + submap.width > self.width:
 
-            point = self.get_connection_point(
-                leaf.left_child
-            )
+                current_x = 0
+                current_y += row_height
 
-            if point is not None:
-                points.append(point)
+                row_height = 0
 
-        # filho direito
-        if leaf.right_child:
+            # verifica altura
+            if current_y + submap.height > self.height:
 
-            point = self.get_connection_point(
-                leaf.right_child
-            )
+                raise ValueError(
+                    "Mapa não cabe dentro do mapa principal"
+                )
 
-            if point is not None:
-                points.append(point)
+            # copia tiles
+            for y in range(submap.height):
+                for x in range(submap.width):
+                    self.grid[current_y + y][current_x + x] = submap.grid[y][x]
 
-        # nenhuma região válida
-        if not points:
-            return None
+            # salva posição global
+            submap.world_x = current_x
+            submap.world_y = current_y
 
-        return self.rng.choice(points)
+            # avança cursor
+            current_x += submap.width
 
-    def connect_tree(self, leaf):
-
-        if (
-            leaf.left_child is None or
-            leaf.right_child is None
-        ):
-            return
-
-        left_point = self.get_connection_point(
-            leaf.left_child
-        )
-
-        right_point = self.get_connection_point(
-            leaf.right_child
-        )
-
-        # só conecta se ambos existirem
-        if (
-            left_point is not None and
-            right_point is not None
-        ):
-
-            self.connect_points(
-                left_point,
-                right_point
-            )
-
-        self.connect_tree(leaf.left_child)
-
-        self.connect_tree(leaf.right_child)
-
-
-    # ============================================================
-    # CORRIDORS DETAILS
-    # ============================================================
-
-    def corridors_details(self):
-        ra_map = RandomWalk(
-            width=self.width,
-            height=self.height,
-            iterations=3,
-            seed=self.seed
-        )
-
-        ra_map.grid = self.corridors_grid
-        ra_map.multi_walk()
+            # atualiza altura da linha
+            row_height = max(row_height, submap.height)
+            x,y = submap.connection_point
+            points.append((x + submap.world_x,y + submap.world_y))
         
-        for x,y in ra_map.floor_tiles:
-            self.grid[y][x] = '.'
-            self.corridors_grid[y][x] = '.'
-
-        
-    # ============================================================
-    # PIPELINE
-    # ============================================================
-
-    def generate(self):
-
-        # 1. divide espaço
-        self.bsp.generate_bsp()
-
-        # 2. gera conteúdo procedural
-        self.generate_regions()
-
-        # 3. conecta regiões
-        self.connect_tree(self.bsp.root)
-
-        self.corridors_details()
-
-
-        
-
-    # ============================================================
-    # DEBUG
-    # ============================================================
+        for i in range(len(points)-1):
+            self.connect_points(points[i],points[i+1])
 
     def print_map(self):
-
         for row in self.grid:
             print("".join(row))

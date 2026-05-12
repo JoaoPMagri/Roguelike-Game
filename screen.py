@@ -2,10 +2,11 @@ import pygame
 import random
 from pygame.locals import *
 from sys import exit
-from maps_generator.BSP import BSP
-from maps_generator.MapGenerator import MixedGenerator
-from maps_generator.RandomWalk import RandomWalk
-from maps_generator.CellularAutomata import CellularAutomata
+from maps_generator.mapGenerator import MapGenerator
+from maps_generator.bsp import Bsp
+from maps_generator.randomWalk import RandomWalk
+from maps_generator.cellularAutomata import CellularAutomata
+from maps_generator.hybridGenerator import HybridGenerator
 
 pygame.init()
 
@@ -21,32 +22,34 @@ tela = pygame.display.set_mode((WIDTH,HEIGHT))
 pygame.display.set_caption('Teste')
 relogio = pygame.time.Clock()
 
-def load_map(grid, tile_size):
+def load_map(mapa, tile_size):
     walls = []
+    floors = []
     player_x = player_y = 0
     exit_x = exit_y = 0
     player_found = False
 
-    for y, linha in enumerate(grid):
-        for x, tile in enumerate(linha):
-            px = x * tile_size
-            py = y * tile_size
+    map_floors = mapa.get_floors()
+    map_walls = mapa.get_walls()
 
-            if tile == '#' or tile == '+' or tile == '_':
-                walls.append(pygame.Rect(px, py, tile_size, tile_size))
+    for x,y in map_floors:
+        px = x * tile_size
+        py = y * tile_size
+        floors.append(pygame.Rect(px, py, tile_size, tile_size))
+        if not player_found:
+            player_x = px + tile_size / 2
+            player_y = py + tile_size / 2
+            player_found = True
+        else:
+            exit_x = px + tile_size / 2
+            exit_y = py + tile_size / 2
+    
+    for x,y in map_walls:
+        walls.append(pygame.Rect(x*tile_size, y*tile_size, tile_size, tile_size))
 
-            elif tile == '.':
-                if not player_found:
-                    player_x = px + tile_size / 2
-                    player_y = py + tile_size / 2
-                    player_found = True
-                else:
-                    exit_x = px + tile_size / 2
-                    exit_y = py + tile_size / 2
+    return walls, player_x, player_y, exit_x, exit_y, floors
 
-    return walls, player_x, player_y, exit_x, exit_y
-
-
+initial_map = MapGenerator(width=WIDTH//30,height=HEIGHT//30,seed=seed)
 
 grid = [ ['.' for _ in range(WIDTH//30)] for _ in range(HEIGHT//30)]
 
@@ -64,31 +67,41 @@ for key, list in letters.items():
         x = valor + 12
         grid[y][x] = '#'
 
-walls, player_x, player_y, exit_x, exit_y = load_map(grid, TILE_SIZE)
+initial_map.grid = grid
+walls, player_x, player_y, exit_x, exit_y, floors = load_map(initial_map, TILE_SIZE)
 
-def get_grid(map_type):
+def get_mapa(map_type):
+    width = WIDTH // TILE_SIZE
+    height = HEIGHT // TILE_SIZE
     if map_type == 0:
-        mapa = RandomWalk(width=WIDTH//30,height=HEIGHT//30,iterations=500,seed=seed)
+        mapa = RandomWalk(width=width,height=height,iterations=width*height*4//5,seed=seed)
         mapa.generate()
-        return mapa.grid
+        return mapa
     elif map_type == 1:
-        mapa = CellularAutomata(width=WIDTH//30,height=HEIGHT//30,iterations=5,density=0.45,seed=seed)
+        mapa = CellularAutomata(width=width,height=height,iterations=4,density=0.45,seed=seed)
         mapa.generate()
-        return mapa.grid
+        return mapa
     elif map_type == 2:
-        mapa = BSP(width=WIDTH//30,height=HEIGHT//30,seed=seed,min_leaf_size=MIN_LEAF_SIZE,min_room_size=MIN_LEAF_SIZE-2)
+        mapa = Bsp(width=width,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE)
         mapa.generate()
-        return mapa.grid
+        return mapa
+    elif map_type == 3:
+        mapa = HybridGenerator(width=width,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE,density=0.7,iterations=3)
+        mapa.generate()
+        return mapa
     else:
-        mapa = MixedGenerator(width=WIDTH//30,height=HEIGHT//30,seed=seed,
-                              min_leaf_size=MIN_LEAF_SIZE,min_room_size=MIN_LEAF_SIZE-2,generators=["MIXED_CA_RW"])
-        mapa.generate()
-        return mapa.grid
+        mapa1 = Bsp(width=width//2,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE)
+        mapa1.generate()
+        mapa2 = CellularAutomata(width=width//2,height=height,seed=seed,density=0.55,iterations=2)
+        mapa2.generate()
+        mapa = MapGenerator(width=width,height=height,seed=seed)
+        mapa.join_maps([mapa1,mapa2])
+        return mapa
         
 
 while True:
     relogio.tick(60)
-    tela.fill((0,102,0))
+    tela.fill((0,0,0))
     for event in pygame.event.get():
         if event.type == QUIT:
             pygame.quit()
@@ -107,24 +120,41 @@ while True:
         new_x = player_x + 2
     elif keys[pygame.K_r]:
         map_type = 0
-        grid = get_grid(map_type)
-        walls, player_x, player_y, exit_x, exit_y = load_map(grid, TILE_SIZE)
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
     elif keys[pygame.K_c]:
         map_type = 1
-        grid = get_grid(map_type)
-        walls, player_x, player_y, exit_x, exit_y = load_map(grid, TILE_SIZE)
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
     elif keys[pygame.K_b]:
         map_type = 2
-        grid = get_grid(map_type)
-        walls, player_x, player_y, exit_x, exit_y = load_map(grid, TILE_SIZE)
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
     elif keys[pygame.K_m]:
         map_type = 3
-        grid = get_grid(map_type)
-        walls, player_x, player_y, exit_x, exit_y = load_map(grid, TILE_SIZE)
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
+    elif keys[pygame.K_j]:
+        map_type = 4
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
     
     circulo = pygame.Rect(new_x-7.5,new_y-7.5,15,15)
     exit_hole = pygame.Rect(exit_x-7.5,exit_y-7.5,15,15)
     possible = True
+
+    for rect in floors:
+        pygame.draw.rect(tela, (0,102,0), rect)
 
     for rect in walls:
         pygame.draw.rect(tela, (102,102,102), rect)
@@ -142,5 +172,5 @@ while True:
 
     if circulo.colliderect(exit_hole):
         seed = rng.random()
-        grid = get_grid(map_type)
-        walls, player_x, player_y, exit_x, exit_y = load_map(grid, TILE_SIZE)
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)

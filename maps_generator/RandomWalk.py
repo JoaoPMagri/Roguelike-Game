@@ -1,125 +1,40 @@
 import random
+from maps_generator.mapGenerator import MapGenerator
 
-
-class RandomWalk:
-
-    def __init__(
-        self,
-        width,
-        height,
-        iterations,
-        seed
-    ):
-
-        self.width = width
-        self.height = height
-
+class RandomWalk(MapGenerator):
+    def __init__(self, width, height, seed, iterations):
+        super().__init__(width, height, seed)
         self.iterations = iterations
+    
+    def make_iterations(self):
+        floors = super().get_floors()
+        for x,y in floors:
+            for _ in range(self.iterations):
+                moves = []
 
-        self.rng = random.Random(seed)
+                if y > 1:
+                    moves.append((0, -1))
 
-        self.grid = [
-            ['#' for _ in range(width)]
-            for _ in range(height)
-        ]
+                if y < self.height - 2:
+                    moves.append((0, 1))
 
-        # padronização
-        self.floor_tiles = []
-        self.connection_point = None
+                if x > 1:
+                    moves.append((-1, 0))
 
-    # ============================================================
-    # GET FLOORS
-    # ============================================================
+                if x < self.width - 2:
+                    moves.append((1, 0))
 
-    def get_floors(self):
-        floor_set = set()
+                dx, dy = self.rng.choice(moves)
 
-        for y in range(self.height):
-            for x in range(self.width):
-                if self.grid[y][x] == '.':
-                    floor_set.add((x, y))
-        
-        self.floor_tiles = list(floor_set)
+                x += dx
+                y += dy
 
-    # ============================================================
-    # WALK
-    # ============================================================
-
-    def walk(self,x,y):
-        for _ in range(self.iterations):
-
-            moves = []
-
-            if y > 1:
-                moves.append((0, -1))
-
-            if y < self.height - 2:
-                moves.append((0, 1))
-
-            if x > 1:
-                moves.append((-1, 0))
-
-            if x < self.width - 2:
-                moves.append((1, 0))
-
-            dx, dy = self.rng.choice(moves)
-
-            x += dx
-            y += dy
-
-            self.grid[y][x] = '.'
-
-    # ============================================================
-    # MULTI WALK
-    # ============================================================
-
-    def multi_walk(self):
-        self.get_floors()
-
-        for floor in self.floor_tiles:
-            x,y = floor
-            self.walk(x=x,y=y)
-        
-        self.get_floors()
-
-
-    # ============================================================
-    # CONNECTION POINT
-    # ============================================================
-
-    def choose_connection_point(self):
-
-        if not self.floor_tiles:
-            self.connection_point = None
-            return
-
-        self.connection_point = self.rng.choice(
-            self.floor_tiles
-        )
-
-
-    # ============================================================
-    # PIPELINE
-    # ============================================================
-
+                self.grid[y][x] = '.'
+    
     def generate(self):
-
-        # começa no centro
-        x = self.width // 2
-        y = self.height // 2
+        x = self.width//2
+        y = self.height//2
         self.grid[y][x] = '.'
 
-        self.walk(x=x,y=y)
-
-        self.get_floors()
-
-        self.choose_connection_point()
-
-    # ============================================================
-    # DEBUG
-    # ============================================================
-
-    def print_map(self):
-
-        for row in self.grid:
-            print("".join(row))
+        self.make_iterations()
+        super().choose_conection_point()

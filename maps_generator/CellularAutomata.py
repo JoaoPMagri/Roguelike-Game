@@ -1,92 +1,23 @@
 import random
+from maps_generator.mapGenerator import MapGenerator
 
-
-class CellularAutomata:
-
-    def __init__(
-        self,
-        width,
-        height,
-        iterations,
-        seed,
-        density=0.5
-    ):
-
-        self.width = width
-        self.height = height
-
-        self.iterations = iterations
+class CellularAutomata(MapGenerator):
+    def __init__(self, width, height, seed,density,iterations):
+        super().__init__(width, height, seed)
         self.density = density
+        self.iterations = iterations
 
-        self.rng = random.Random(seed)
-
-        self.grid = [
-            ['#' for _ in range(width)]
-            for _ in range(height)
-        ]
-
-        self.grid_textured = [
-            ['#' for _ in range(width)]
-            for _ in range(height)
-        ]
-
-        # padronização
-        self.floor_tiles = []
-        self.connection_point = None
-
-    # ============================================================
-    # RANDOM INITIALIZATION
-    # ============================================================
-
-    def generate_random(self):
-
+    def set_random_points(self):
         for y in range(self.height):
-
-            for x in range(self.width):
-
-                if self.rng.random() < self.density:
-                    self.grid[y][x] = '.'
-
-    # ============================================================
-    # WALL COUNT
-    # ============================================================
-
-    def count_walls_around(self, x, y):
-
-        walls = 0
-
-        for dy in [-1, 0, 1]:
-
-            for dx in [-1, 0, 1]:
-
-                if dx == 0 and dy == 0:
-                    continue
-
-                nx = x + dx
-                ny = y + dy
-
-                # fora do mapa = parede
-                if (
-                    nx < 0 or
-                    ny < 0 or
-                    nx >= self.width or
-                    ny >= self.height
-                ):
-                    walls += 1
-
-                elif self.grid[ny][nx] == '#':
-                    walls += 1
-
-        return walls
-
-    # ============================================================
-    # ITERATIONS
-    # ============================================================
-
+            if 1 <= y <= self.height-2:
+                for x in range(self.width):
+                    if 1 <= x <= self.width-2:
+                        if self.rng.random() < self.density:
+                            self.grid[y][x] = '.'
+    
+    
     def make_iterations(self):
-
         for _ in range(self.iterations):
-
             new_grid = [
                 ['#' for _ in range(self.width)]
                 for _ in range(self.height)
@@ -96,9 +27,18 @@ class CellularAutomata:
 
                 for x in range(self.width):
 
-                    walls = self.count_walls_around(x, y)
+                    neighbors = super().get_neighbors(x,y)
 
-                    # regra clássica
+                    walls = 0
+                    aux = 0
+                    for i,j in neighbors:
+                        if self.grid[j][i] == '#':
+                            walls += 1
+                        aux += 1
+                    
+                    
+                    walls += 8 - aux
+
                     if walls >= 5:
                         new_grid[y][x] = '#'
                     else:
@@ -106,28 +46,12 @@ class CellularAutomata:
 
             self.grid = new_grid
 
-    # ============================================================
-    # FLOOR DETECTION
-    # ============================================================
+    # ==============================================================
+    # GET NEIGHBORS (polymorphism)
+    # ==============================================================
 
-    def find_floor_tiles(self):
-
-        self.floor_tiles = []
-
-        for y in range(self.height):
-
-            for x in range(self.width):
-
-                if self.grid[y][x] == '.':
-                    self.floor_tiles.append((x, y))
-
-    # ============================================================
-    # GET NEIGHBORS 
-    # ============================================================
-
-    def get_neighbors(self, x, y):
-
-        neighbors = []
+    def get_neighbors(self,x,y):
+        neighbors = set()
 
         directions = [
             (0, -1),
@@ -146,14 +70,14 @@ class CellularAutomata:
                 0 <= ny < self.height
             ):
 
-                neighbors.append((nx, ny))
+                neighbors.add((nx, ny))
 
         return neighbors
-    
-    # ============================================================
-    # FLOOD FILL 
-    # ============================================================
-    
+
+    # ==============================================================
+    # GET REGIONS
+    # ==============================================================
+
     def flood_fill(self, start_x, start_y, visited):
 
         stack = [(start_x, start_y)]
@@ -183,10 +107,6 @@ class CellularAutomata:
         return region
     
 
-    # ============================================================
-    # FIND REGIONS
-    # ============================================================
-
     def find_regions(self):
 
         visited = set()
@@ -197,22 +117,32 @@ class CellularAutomata:
 
             for x in range(self.width):
 
-                if (
-                    self.grid[y][x] == '.' and
-                    (x, y) not in visited
-                ):
+                if (self.grid[y][x] == '.' and (x, y) not in visited):
 
-                    region = self.flood_fill(
-                        x,
-                        y,
-                        visited
-                    )
+                    region = self.flood_fill(x,y,visited)
 
                     if region:
                         regions.append(region)
 
         return regions
-
+    
+    # ==============================================================
+    # CONNECT REGIONS
+    # ==============================================================
+    
+    def connect_regions(self):
+        regions = self.find_regions()
+        points = []
+        regiao = 0
+        for region in regions:
+            regiao += 1
+            point = self.rng.choice(region)
+            points.append(point)
+        for i in range(len(points)-1):
+            super().connect_points(points[i],points[i+1])
+        
+        print(regiao)
+    
     # ============================================================
     # KEEP LARGEST REGION
     # ============================================================    
@@ -237,43 +167,12 @@ class CellularAutomata:
 
                 if (x, y) not in largest_set:
                     self.grid[y][x] = '#'
+        
+
     
-    # ============================================================
-    # CONNECTION POINT
-    # ============================================================
-
-    def choose_connection_point(self):
-
-        if not self.floor_tiles:
-            self.connection_point = None
-            return
-
-        # pode melhorar depois
-        self.connection_point = self.rng.choice(
-            self.floor_tiles
-        )
-
-    # ============================================================
-    # PIPELINE
-    # ============================================================
-
     def generate(self):
-
-        self.generate_random()
-
+        self.set_random_points()
         self.make_iterations()
-
+        #self.connect_regions()
         self.keep_largest_region()
-
-        self.find_floor_tiles()
-
-        self.choose_connection_point()
-
-    # ============================================================
-    # DEBUG
-    # ============================================================
-
-    def print_map(self):
-
-        for row in self.grid:
-            print("".join(row))
+        super().choose_conection_point()
