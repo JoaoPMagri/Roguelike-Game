@@ -63,6 +63,11 @@ class HybridGenerator(MapGenerator):
         for i in range(len(points)-1): 
             self.connect_points(points[i],points[i+1])
         
+        for i in self.corridors_grid:
+            print("".join(i))
+        
         self.make_random_path()
         super().choose_conection_point()
+        for i in self.corridors_grid:
+            print("".join(i))
         
