@@ -10,16 +10,16 @@ from maps_generator.hybridGenerator import HybridGenerator
 
 pygame.init()
 
-WIDTH = 1200
-HEIGHT = 600
+WIDTH = 1280
+HEIGHT = 640
 seed = random.random()
-TILE_SIZE = 30
+TILE_SIZE = 32
 MIN_LEAF_SIZE = 8
 map_type = 0
 rng = random.Random(seed)
 
 tela = pygame.display.set_mode((WIDTH,HEIGHT))
-pygame.display.set_caption('Teste')
+pygame.display.set_caption('Mapas com Geração Procedural')
 relogio = pygame.time.Clock()
 
 def load_map(mapa, tile_size):
@@ -49,9 +49,9 @@ def load_map(mapa, tile_size):
 
     return walls, player_x, player_y, exit_x, exit_y, floors
 
-initial_map = MapGenerator(width=WIDTH//30,height=HEIGHT//30,seed=seed)
+initial_map = MapGenerator(width=WIDTH//TILE_SIZE,height=HEIGHT//TILE_SIZE,seed=seed)
 
-grid = [ ['.' for _ in range(WIDTH//30)] for _ in range(HEIGHT//30)]
+grid = [ ['.' for _ in range(WIDTH//TILE_SIZE)] for _ in range(HEIGHT//TILE_SIZE)]
 
 letters = {
             0: [0,4,6,7,8,9,10,12,13,14,15,16], 1: [0,1,3,4,6,10,12,16], 
@@ -89,18 +89,33 @@ def get_mapa(map_type):
         mapa = HybridGenerator(width=width,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE,density=0.7,iterations=3)
         mapa.generate()
         return mapa
-    else:
+    elif map_type == 4:
         mapa1 = Bsp(width=width//2,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE)
         mapa1.generate()
-        mapa2 = CellularAutomata(width=width//2,height=height,seed=seed,density=0.55,iterations=2)
+        mapa2 = HybridGenerator(width=width//2,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE,density=0.7,iterations=3)
         mapa2.generate()
         mapa = MapGenerator(width=width,height=height,seed=seed)
         mapa.join_maps([mapa1,mapa2])
         return mapa
-        
+    elif map_type == 5:
+        mapa1 = HybridGenerator(width=width//2,height=height,seed=seed,min_leaf_size=MIN_LEAF_SIZE,density=0.7,iterations=3)
+        mapa1.generate()
+        mapa2 = CellularAutomata(width=width//2,height=height,seed=seed,density=0.5,iterations=4)
+        mapa2.generate()
+        mapa = MapGenerator(width=width,height=height,seed=seed)
+        mapa.join_maps([mapa1,mapa2])
+        return mapa
+    elif map_type == 6:
+        mapa1 = CellularAutomata(width=width//2,height=height,seed=seed,density=0.5,iterations=4)
+        mapa1.generate()
+        mapa2 = RandomWalk(width=width//2,height=height,seed=seed,iterations=width*height*2//5)
+        mapa2.generate()
+        mapa = MapGenerator(width=width,height=height,seed=seed)
+        mapa.join_maps([mapa1,mapa2])
+        return mapa
 
 while True:
-    relogio.tick(60)
+    relogio.tick(120)
     tela.fill((0,0,0))
     for event in pygame.event.get():
         if event.type == QUIT:
@@ -142,8 +157,20 @@ while True:
         walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
         new_x = player_x
         new_y = player_y
-    elif keys[pygame.K_j]:
+    elif keys[pygame.K_f]:
         map_type = 4
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
+    elif keys[pygame.K_g]:
+        map_type = 5
+        mapa = get_mapa(map_type)
+        walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
+        new_x = player_x
+        new_y = player_y
+    elif keys[pygame.K_h]:
+        map_type = 6
         mapa = get_mapa(map_type)
         walls, player_x, player_y, exit_x, exit_y, floors = load_map(mapa, TILE_SIZE)
         new_x = player_x
