@@ -1,4 +1,5 @@
 import pygame
+import random
 from typing import List, Tuple
 from config import WIDTH, HEIGHT, TILE_SIZE, MIN_LEAF_SIZE
 from maps_generator.mapGenerator import MapGenerator
@@ -87,12 +88,9 @@ class MapService:
             return MapService.create_initial_intro_map(seed)
 
     @staticmethod
-    def load_geometry(mapa: MapGenerator, tile_size: int = TILE_SIZE) -> Tuple[List[pygame.Rect], List[pygame.Rect], Tuple[float, float], Tuple[float, float]]:
+    def load_geometry(mapa: MapGenerator, tile_size: int, seed: float) -> Tuple[List[pygame.Rect], List[pygame.Rect], Tuple[float, float], Tuple[float, float]]:
         walls = []
         floors = []
-        player_x = player_y = 0.0
-        exit_x = exit_y = 0.0
-        player_found = False
 
         map_floors = mapa.get_floors()
         map_walls = mapa.get_walls()
@@ -101,15 +99,29 @@ class MapService:
             px = x * tile_size
             py = y * tile_size
             floors.append(pygame.Rect(px, py, tile_size, tile_size))
-            if not player_found:
-                player_x = px + tile_size / 2
-                player_y = py + tile_size / 2
-                player_found = True
-            else:
-                exit_x = px + tile_size / 2
-                exit_y = py + tile_size / 2
 
         for x, y in map_walls:
             walls.append(pygame.Rect(x * tile_size, y * tile_size, tile_size, tile_size))
 
-        return floors, walls, (player_x, player_y), (exit_x, exit_y)
+        rng = random.Random(seed)
+        entrance_x = entrance_y = exit_x = exit_y = 0.0
+
+        if map_floors:
+            floor_choices = list(map_floors)
+            rng.shuffle(floor_choices)
+            entrance = floor_choices[0]
+
+            exit_point = entrance
+            max_dist = -1
+            for f in floor_choices:
+                dist = (f[0] - entrance[0])**2 + (f[1] - entrance[1])**2
+                if dist > max_dist:
+                    max_dist = dist
+                    exit_point = f
+
+            entrance_x = entrance[0] * tile_size + tile_size / 2
+            entrance_y = entrance[1] * tile_size + tile_size / 2
+            exit_x = exit_point[0] * tile_size + tile_size / 2
+            exit_y = exit_point[1] * tile_size + tile_size / 2
+
+        return floors, walls, (entrance_x, entrance_y), (exit_x, exit_y)
