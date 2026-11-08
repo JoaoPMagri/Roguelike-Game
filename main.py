@@ -7,7 +7,7 @@ from pygame.locals import QUIT
 from config import WIDTH, HEIGHT, FPS, TILE_SIZE
 from entities import Player
 from collisions import CollisionManager
-from rendering import GameRenderer
+from rendering import GameRenderer, Camera
 from maps_generator import MapService
 
 
@@ -22,6 +22,7 @@ class Game:
         self.clock = pygame.time.Clock()
 
         self.renderer = GameRenderer(self.screen)
+        self.camera = Camera()
         self.collision_manager = CollisionManager()
         self.player = Player()
 
@@ -38,15 +39,13 @@ class Game:
         self.floors = []
         self.walls = []
 
-        self.entrance_pos = (0.0, 0.0)
-        self.exit_pos = (0.0, 0.0)
-
-        self.entrance_triggered = False
-        self.exit_triggered = False
+        self.entrance_door = None
+        self.exit_door = None
 
         # Cada entrada representa um nível puro ou intermediário.
         self.levels_history = []
         self.current_level_idx = -1
+        self.map_view_dismissed = False
 
         self._start_game()
 
@@ -75,85 +74,153 @@ class Game:
         seed = self.rng.random()
 
         self.current_level_idx = 0
+
+        # No primeiro mapa não existe porta de entrada: existe apenas
+        # uma posição inicial. A saída continua sendo uma porta normal.
+        sides = ["top", "bottom", "left", "right"]
+        spawn_side = self.rng.choice(sides)
+        exit_side = self.rng.choice([
+            side for side in sides
+            if side != spawn_side
+        ])
+
         self.levels_history.append({
             "type": "pure",
             "algorithm": map_type,
             "seed": seed,
+            "entrance_side": None,
+            "spawn_side": spawn_side,
+            "exit_side": exit_side
         })
 
         self._generate_and_apply_pure_map(
             seed,
             map_type,
-            spawn_near_entrance=True
+            spawn_mode="initial",
+            entrance_side=None,
+            exit_side=exit_side,
+            spawn_side=spawn_side
         )
 
     def _apply_map(
         self,
         mapa,
-        seed: float,
-        spawn_near_entrance: bool,
-        spawn_info=None
+        seed,
+        spawn_mode=None,
+        spawn_info=None,
+        entrance_side=None,
+        exit_side=None,
+        spawn_side=None
     ):
-        """Carrega a geometria do mapa e posiciona o jogador."""
-        self.floors, self.walls, self.entrance_pos, self.exit_pos = MapService.load_geometry(
+        """Carrega o mapa, suas portas e posiciona o jogador."""
+
+        (
+            self.floors,
+            self.walls,
+            self.entrance_door,
+            self.exit_door,
+            spawn_position
+        ) = MapService.load_geometry(
             mapa,
             TILE_SIZE,
             seed,
-            spawn_info=spawn_info
+            spawn_info=spawn_info,
+            entrance_side=entrance_side,
+            exit_side=exit_side,
+            spawn_side=spawn_side
         )
 
-        if spawn_near_entrance:
+        # -----------------------------------------
+        # Posicionamento do jogador
+        # -----------------------------------------
+
+        spawn_tile = None
+
+        if spawn_mode == "entrance" and self.entrance_door is not None:
+            spawn_tile = self.entrance_door["floor"]
+
+        elif spawn_mode == "exit" and self.exit_door is not None:
+            spawn_tile = self.exit_door["floor"]
+
+        elif spawn_mode == "initial":
+            spawn_tile = spawn_position
+
+        if spawn_tile is not None:
+            floor_x, floor_y = spawn_tile
             self.player.set_position(
-                self.entrance_pos[0],
-                self.entrance_pos[1]
+                floor_x + TILE_SIZE / 2,
+                floor_y + TILE_SIZE / 2
             )
 
-            # O jogador acabou de entrar pela entrance.
-            self.entrance_triggered = True
-            self.exit_triggered = False
-
-        else:
-            self.player.set_position(
-                self.exit_pos[0],
-                self.exit_pos[1]
-            )
-
-            # O jogador acabou de entrar pela exit.
-            self.entrance_triggered = False
-            self.exit_triggered = True
+        self.camera.set_map_size(
+            mapa.width * TILE_SIZE,
+            mapa.height * TILE_SIZE
+        )
+        self.camera.update(self.player.x, self.player.y)
 
     def _generate_and_apply_pure_map(
         self,
-        seed: float,
-        map_type: int,
-        spawn_near_entrance: bool
+        seed,
+        map_type,
+        spawn_mode=None,
+        entrance_side=None,
+        exit_side=None,
+        spawn_side=None
     ):
-        mapa = MapService.generate_map(map_type, seed)
+        mapa = MapService.generate_map(
+            map_type,
+            seed
+        )
+
+        # Se a saída ainda não foi definida,
+        # escolhe um lado diferente da entrada.
+        if exit_side is None:
+            sides = [
+                "top",
+                "bottom",
+                "left",
+                "right"
+            ]
+
+            if entrance_side is not None:
+                sides.remove(entrance_side)
+
+            exit_side = self.rng.choice(sides)
+
         self._apply_map(
             mapa,
             seed=seed,
-            spawn_near_entrance=spawn_near_entrance
+            spawn_mode=spawn_mode,
+            entrance_side=entrance_side,
+            exit_side=exit_side,
+            spawn_side=spawn_side
         )
 
-    def _generate_and_apply_intermediate_map(self, level, spawn_near_entrance):
-        """Regenera um mapa intermediário usando os dados salvos no histórico."""
+    def _generate_and_apply_intermediate_map(
+        self,
+        level,
+        spawn_mode
+    ):
+        """Regenera um mapa intermediário usando os dados salvos."""
+
         mapa, spawn_info = MapService.generate_intermediate_map(
             algorithm_a=level["algorithm_a"],
             algorithm_b=level["algorithm_b"],
             seed_a=level["seed_a"],
             seed_b=level["seed_b"],
             layout=level["layout"],
-            reverse=level["reverse"],
+            reverse=level["reverse"]
         )
 
-        # Usa uma seed própria e determinística para a escolha de entrance/exit.
         geometry_seed = level["geometry_seed"]
 
         self._apply_map(
             mapa,
             seed=geometry_seed,
-            spawn_near_entrance=spawn_near_entrance,
-            spawn_info=spawn_info
+            spawn_mode=spawn_mode,
+            spawn_info=spawn_info,
+            entrance_side=level.get("entrance_side"),
+            exit_side=level.get("exit_side")
         )
 
     def _create_intermediate_level(self, current_level):
@@ -174,13 +241,61 @@ class Game:
         # A segunda parte recebe uma nova seed independente.
         seed_b = self.rng.random()
 
-        # Define aleatoriamente a orientação da composição.
-        layout = self.rng.choice(["horizontal", "vertical"])
+        # A composição do intermediário precisa preservar a continuidade
+        # espacial do mapa anterior. O submapa A representa o mapa de
+        # origem, enquanto o submapa B representa o próximo algoritmo.
+        #
+        # Por isso, a orientação não pode ser completamente aleatória:
+        # ela é definida pela direção da saída do mapa anterior.
+        #
+        # Exemplo:
+        #   saída anterior = direita
+        #   entrada do intermediário = esquerda
+        #   A fica à esquerda e B à direita
+        #
+        # Assim mantemos simultaneamente:
+        # 1. entrada no lado oposto à saída anterior;
+        # 2. entrada dentro do submapa de origem (A);
+        # 3. saída dentro do novo submapa (B);
+        # 4. continuidade espacial entre os mapas.
+        previous_exit_side = current_level.get("exit_side")
 
-        # Define aleatoriamente qual algoritmo ficará primeiro.
-        reverse = self.rng.choice([False, True])
+        if previous_exit_side is None:
+            # Fallback apenas para níveis antigos sem informação de lado.
+            sides = ["top", "bottom", "left", "right"]
+            entrance_side = self.rng.choice(sides)
+            exit_side = self.rng.choice([
+                side for side in sides
+                if side != entrance_side
+            ])
+            layout = self.rng.choice(["horizontal", "vertical"])
+            reverse = self.rng.choice([False, True])
+        else:
+            entrance_side = MapService.OPPOSITE_SIDES[
+                previous_exit_side
+            ]
 
-        # Seed utilizada somente para determinar entrance/exit da composição.
+            # A saída do intermediário continua na mesma direção da saída
+            # do mapa de origem. Dessa forma, o jogador atravessa:
+            # mapa A -> intermediário A -> intermediário B -> mapa B.
+            exit_side = previous_exit_side
+
+            if previous_exit_side in ("left", "right"):
+                layout = "horizontal"
+
+                # A deve ficar do lado da entrada e B do lado da saída.
+                # left  -> A | B
+                # right -> B | A
+                reverse = previous_exit_side == "left"
+            else:
+                layout = "vertical"
+
+                # A deve ficar do lado da entrada e B do lado da saída.
+                # top    -> A / B
+                # bottom -> B / A
+                reverse = previous_exit_side == "top"
+
+        # Seed utilizada somente para determinar a geometria das portas.
         geometry_seed = self.rng.random()
 
         return {
@@ -192,34 +307,50 @@ class Game:
             "layout": layout,
             "reverse": reverse,
             "geometry_seed": geometry_seed,
+            "entrance_side": entrance_side,
+            "exit_side": exit_side
         }
 
     def _create_next_pure_level(self, intermediate_level):
         """
-        Cria o mapa puro que vem depois de um intermediário.
-
-        O mapa puro reutiliza a mesma seed usada para gerar o submapa B.
-        Assim, o algoritmo sorteado para a transição é também o mapa puro
-        que aparece logo depois dela, sem um novo sorteio de algoritmo.
+        Cria o mapa puro que vem depois do intermediário.
         """
+
+        previous_exit_side = intermediate_level.get(
+            "exit_side"
+        )
+
+        entrance_side = MapService.OPPOSITE_SIDES[
+            previous_exit_side
+        ]
+
         return {
             "type": "pure",
             "algorithm": intermediate_level["algorithm_b"],
             "seed": intermediate_level["seed_b"],
+
+            "entrance_side": entrance_side,
+            "exit_side": self.rng.choice([
+                side for side in ["top", "bottom", "left", "right"]
+                if side != entrance_side
+            ])
         }
 
-    def _load_level(self, level, spawn_near_entrance):
+    def _load_level(self, level, spawn_mode):
         """Carrega qualquer nível do histórico."""
         if level["type"] == "pure":
             self._generate_and_apply_pure_map(
                 level["seed"],
                 level["algorithm"],
-                spawn_near_entrance
+                spawn_mode,
+                entrance_side=level.get("entrance_side"),
+                exit_side=level.get("exit_side"),
+                spawn_side=level.get("spawn_side")
             )
         else:
             self._generate_and_apply_intermediate_map(
                 level,
-                spawn_near_entrance
+                spawn_mode
             )
 
     def go_to_next_level(self):
@@ -259,7 +390,7 @@ class Game:
 
         self._load_level(
             level,
-            spawn_near_entrance=True
+            spawn_mode="entrance"
         )
 
         self._print_level_info(level)
@@ -276,7 +407,7 @@ class Game:
 
         self._load_level(
             level,
-            spawn_near_entrance=False
+            spawn_mode="exit"
         )
 
         self._print_level_info(level)
@@ -311,51 +442,65 @@ class Game:
         target_x, target_y = self.player.calculate_desired_position(keys)
         candidate_rect = self.player.get_rect(target_x, target_y)
 
-        # Colisão com paredes
+        # As portas ocupam um tile que normalmente seria parede,
+        # mas precisam ser atravessáveis para disparar a transição.
+        door_tiles = set()
+
+        for door in (self.entrance_door, self.exit_door):
+            if door is not None:
+                door_tiles.add(door["tile"])
+
+        collision_walls = [
+            wall
+            for wall in self.walls
+            if (wall.x, wall.y) not in door_tiles
+        ]
+
         if not self.collision_manager.check_wall_collision(
             candidate_rect,
-            self.walls
+            collision_walls
         ):
             self.player.set_position(target_x, target_y)
 
-        radius = self.player.radius
-        trigger_size = radius * 2
         current_player_rect = self.player.get_rect()
 
         # =========================================================
         # EXIT → avança de nível
         # =========================================================
 
-        exit_rect = pygame.Rect(
-            self.exit_pos[0] - radius,
-            self.exit_pos[1] - radius,
-            trigger_size,
-            trigger_size,
-        )
+        if self.exit_door is not None:
 
-        touching_exit = self.collision_manager.check_trigger_collision(
-            current_player_rect,
-            exit_rect
-        )
+            exit_x, exit_y = self.exit_door["tile"]
 
-        if not touching_exit:
-            self.exit_triggered = False
+            exit_rect = pygame.Rect(
+                exit_x,
+                exit_y,
+                TILE_SIZE,
+                TILE_SIZE
+            )
 
-        if touching_exit and not self.exit_triggered:
-            self.exit_triggered = True
-            self.go_to_next_level()
-            return
+            touching_exit = self.collision_manager.check_trigger_collision(
+                current_player_rect,
+                exit_rect
+            )
+
+            if touching_exit:
+                self.go_to_next_level()
+                return
 
         # =========================================================
         # ENTRANCE → recua de nível
         # =========================================================
 
-        if self.current_level_idx >= 1:
+        if self.current_level_idx > 0 and self.entrance_door is not None:
+
+            entrance_x, entrance_y = self.entrance_door["tile"]
+
             entrance_rect = pygame.Rect(
-                self.entrance_pos[0] - radius,
-                self.entrance_pos[1] - radius,
-                trigger_size,
-                trigger_size,
+                entrance_x,
+                entrance_y,
+                TILE_SIZE,
+                TILE_SIZE
             )
 
             touching_entrance = self.collision_manager.check_trigger_collision(
@@ -363,11 +508,7 @@ class Game:
                 entrance_rect
             )
 
-            if not touching_entrance:
-                self.entrance_triggered = False
-
-            if touching_entrance and not self.entrance_triggered:
-                self.entrance_triggered = True
+            if touching_entrance:
                 self.go_to_prev_level()
                 return
 
@@ -378,15 +519,26 @@ class Game:
 
             keys = pygame.key.get_pressed()
             self.update_player(keys)
+            self.camera.update(self.player.x, self.player.y)
+
+            if not keys[pygame.K_TAB]:
+                self.map_view_dismissed = False
+                show_full_map = False
+            else:
+                if self.player.is_moving:
+                    self.map_view_dismissed = True
+                show_full_map = not self.map_view_dismissed
 
             self.renderer.render_frame(
                 self.floors,
                 self.walls,
                 self.player,
-                self.exit_pos,
-                self.entrance_pos,
+                self.exit_door,
+                self.entrance_door,
                 self.current_level_idx,
-                self.levels_history[self.current_level_idx]
+                self.levels_history[self.current_level_idx],
+                self.camera,
+                show_full_map=show_full_map
             )
 
 if __name__ == "__main__":

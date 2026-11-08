@@ -6,8 +6,26 @@ HEIGHT = 720
 FPS = 120
 
 # Configurações do mapa e grid
-TILE_SIZE = 32
+TILE_SIZE = 224
+MAP_WIDTH = 60
+MAP_HEIGHT = 36
 MIN_LEAF_SIZE = 8
+
+# Configurações do jogador (proporcionais ao tamanho do tile)
+PLAYER_SPEED = TILE_SIZE * 0.025
+PLAYER_SPRITE_PATH = "assets/PlayerModels.png"
+PLAYER_SPRITE_SIZE = int(TILE_SIZE * 0.35)
+PLAYER_HITBOX_WIDTH = int(PLAYER_SPRITE_SIZE * 0.68)
+PLAYER_HITBOX_HEIGHT = int(PLAYER_SPRITE_SIZE * 0.94)
+PLAYER_RADIUS = PLAYER_HITBOX_WIDTH / 2
+PLAYER_ANIMATION_COOLDOWN = 80
+
+# Distância mínima desejada entre entrada e saída de um mesmo mapa.
+MIN_DOOR_DISTANCE_TILES = 25
+
+# Configurações do Tileset (4x4 sprites de 32x32 pixels)
+MAPTILES_PATH = "assets/MapTiles.png"
+SPRITE_SIZE = 32
 
 # Cores (R, G, B)
 # Paletas por algoritmo
