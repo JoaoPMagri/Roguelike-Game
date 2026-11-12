@@ -13,6 +13,8 @@ from config import (
     COLOR_PLAYER,
 )
 from rendering.camera import Camera
+from rendering.hud import HUD
+from persistence import get_resource_path
 
 
 class GameRenderer:
@@ -53,10 +55,15 @@ class GameRenderer:
         self.surface = surface
         self.sprites = self._load_tileset()
         self.player_sprites = self._load_player_sprites()
+        self.hud = HUD(self.surface)
 
         # Guarda a rotação orgânica de cada coordenada de tile {(tile_x, tile_y): angle}
         self.tile_rotations = {}
         self.current_level_key = None
+
+        # Guarda os tiles já renderizados (explorados) por nível:
+        # {level_idx: set((tile_x, tile_y))}
+        self.explored_tiles_by_level = {}
 
         # =========================================================
         # CONTROLE DA TRANSIÇÃO
@@ -76,8 +83,7 @@ class GameRenderer:
         - Colunas (0..3): floor, wall, background, door
         Pré-escala para TILE_SIZE e pré-rotaciona em 0°, 90°, 180° e 270°.
         """
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        tileset_full_path = os.path.join(base_dir, MAPTILES_PATH)
+        tileset_full_path = get_resource_path(MAPTILES_PATH)
         sheet = pygame.image.load(tileset_full_path).convert()
 
         sprites = {}
@@ -103,15 +109,14 @@ class GameRenderer:
 
         return sprites
 
-    def _load_player_sprites(self) -> dict:
+    def _load_player_sprites(self, sprite_path: str = PLAYER_SPRITE_PATH) -> dict:
         """
         Carrega a spritesheet do jogador (3 linhas x 4 colunas de 32x32):
         - Linha 0: baixo (down)
         - Linha 1: direita (right) -> espelhada horizontalmente para esquerda (left)
         - Linha 2: cima (up)
         """
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        player_full_path = os.path.join(base_dir, PLAYER_SPRITE_PATH)
+        player_full_path = get_resource_path(sprite_path)
         sheet = pygame.image.load(player_full_path).convert_alpha()
 
         player_sprites = {}
@@ -139,6 +144,15 @@ class GameRenderer:
         ]
 
         return player_sprites
+
+    def set_player_sprite(self, sprite_path: str):
+        """Atualiza os sprites do jogador com base no personagem selecionado."""
+        self.player_sprites = self._load_player_sprites(sprite_path)
+
+    def set_surface(self, surface: pygame.Surface):
+        """Atualiza a superfície de renderização quando o tamanho da janela muda."""
+        self.surface = surface
+        self.hud.surface = surface
 
     def _get_tile_rotation(self, tile_x: int, tile_y: int) -> int:
         """Retorna uma rotação aleatória fixa por coordenada de tile."""
@@ -177,8 +191,13 @@ class GameRenderer:
         start_y = max(0, (viewport.top // TILE_SIZE) * TILE_SIZE)
         end_y = min(camera.map_height, ((viewport.bottom // TILE_SIZE) + 1) * TILE_SIZE)
 
+        explored = self.explored_tiles_by_level.setdefault(
+            self.current_level_key, set()
+        )
+
         for tile_y in range(start_y, end_y, TILE_SIZE):
             for tile_x in range(start_x, end_x, TILE_SIZE):
+                explored.add((tile_x, tile_y))
                 tile_rect = pygame.Rect(tile_x, tile_y, TILE_SIZE, TILE_SIZE)
 
                 if (tile_x, tile_y) in floor_positions:
@@ -283,7 +302,8 @@ class GameRenderer:
         current_level_idx: int,
         level,
         camera: Camera,
-        show_full_map: bool = False
+        show_full_map: bool = False,
+        flip_display: bool = True
     ):
         if current_level_idx != self.current_level_key:
             self.current_level_key = current_level_idx
@@ -299,7 +319,9 @@ class GameRenderer:
                 level,
                 camera
             )
-            pygame.display.update()
+            self.hud.draw(current_level_idx, level, player)
+            if flip_display:
+                pygame.display.update()
             return
 
         # =========================================================
@@ -350,7 +372,14 @@ class GameRenderer:
 
         self.draw_player(player, camera)
 
-        pygame.display.update()
+        # =========================================================
+        # HUD
+        # =========================================================
+
+        self.hud.draw(current_level_idx, level, player)
+
+        if flip_display:
+            pygame.display.update()
 
     def draw_transition(
         self,
@@ -505,29 +534,46 @@ class GameRenderer:
         camera: Camera
     ):
         """
-        Renderiza o mapa completo ajustado à janela usando apenas as paletas de cores,
-        sem sprites e sem recorte da câmera (ativado ao segurar TAB).
+        Renderiza o mapa simplificado ajustado à janela usando apenas as paletas de cores,
+        exibindo somente os tiles que já foram renderizados pela câmera (ativado ao segurar TAB).
         """
         screen_w = self.surface.get_width()
         screen_h = self.surface.get_height()
 
+        # Garante que a área atual da câmera também conste como renderizada
+        viewport = camera.get_viewport_rect()
+        v_start_x = max(0, (viewport.left // TILE_SIZE) * TILE_SIZE)
+        v_end_x = min(camera.map_width, ((viewport.right // TILE_SIZE) + 1) * TILE_SIZE)
+        v_start_y = max(0, (viewport.top // TILE_SIZE) * TILE_SIZE)
+        v_end_y = min(camera.map_height, ((viewport.bottom // TILE_SIZE) + 1) * TILE_SIZE)
+
+        explored = self.explored_tiles_by_level.setdefault(
+            self.current_level_key, set()
+        )
+        for ty in range(v_start_y, v_end_y, TILE_SIZE):
+            for tx in range(v_start_x, v_end_x, TILE_SIZE):
+                explored.add((tx, ty))
+
+        # Área não explorada fica preta
+        self.surface.fill((0, 0, 0))
+
+        tile_types = {}
+        for rect in floors:
+            tile_types[(rect.x, rect.y)] = "floor"
+        for rect in walls:
+            tile_types[(rect.x, rect.y)] = "wall"
+
         if level["type"] == "pure":
             algorithm_a = level["algorithm"]
             palette_a = MAP_PALETTES[algorithm_a]
-            self.surface.fill(palette_a["background"])
 
-            for rect in floors:
+            for tile_x, tile_y in explored:
+                t_type = tile_types.get((tile_x, tile_y), "background")
+                world_rect = pygame.Rect(tile_x, tile_y, TILE_SIZE, TILE_SIZE)
                 pygame.draw.rect(
                     self.surface,
-                    palette_a["floor"],
-                    self._scale_world_rect_to_screen(rect, camera)
-                )
-
-            for rect in walls:
-                pygame.draw.rect(
-                    self.surface,
-                    palette_a["wall"],
-                    self._scale_world_rect_to_screen(rect, camera)
+                    palette_a[t_type],
+                    self._scale_world_rect_to_screen(world_rect, camera)
                 )
         else:
             algorithm_a = level["algorithm_a"]
@@ -535,57 +581,7 @@ class GameRenderer:
             layout = level["layout"]
             reverse = level["reverse"]
 
-            palette_a = MAP_PALETTES[algorithm_a]
-            palette_b = MAP_PALETTES[algorithm_b]
-            first_palette = palette_b if reverse else palette_a
-            second_palette = palette_a if reverse else palette_b
-
-            if layout == "horizontal":
-                half_w = screen_w // 2
-                pygame.draw.rect(
-                    self.surface,
-                    first_palette["background"],
-                    pygame.Rect(0, 0, half_w, screen_h)
-                )
-                pygame.draw.rect(
-                    self.surface,
-                    second_palette["background"],
-                    pygame.Rect(half_w, 0, screen_w - half_w, screen_h)
-                )
-            else:
-                half_h = screen_h // 2
-                pygame.draw.rect(
-                    self.surface,
-                    first_palette["background"],
-                    pygame.Rect(0, 0, screen_w, half_h)
-                )
-                pygame.draw.rect(
-                    self.surface,
-                    second_palette["background"],
-                    pygame.Rect(0, half_h, screen_w, screen_h - half_h)
-                )
-
-            for rect in floors:
-                alg = self._get_algorithm_for_rect(
-                    rect, camera, algorithm_a, algorithm_b, layout, reverse
-                )
-                pygame.draw.rect(
-                    self.surface,
-                    MAP_PALETTES[alg]["floor"],
-                    self._scale_world_rect_to_screen(rect, camera)
-                )
-
-            for rect in walls:
-                alg = self._get_algorithm_for_rect(
-                    rect, camera, algorithm_a, algorithm_b, layout, reverse
-                )
-                pygame.draw.rect(
-                    self.surface,
-                    MAP_PALETTES[alg]["wall"],
-                    self._scale_world_rect_to_screen(rect, camera)
-                )
-
-            # Aplica a máscara estática de transição com cores sólidas
+            # Garante que a máscara estática de transição esteja populada
             transition_key = (
                 self.current_level_key,
                 algorithm_a,
@@ -600,12 +596,6 @@ class GameRenderer:
             first_alg = algorithm_b if reverse else algorithm_a
             second_alg = algorithm_a if reverse else algorithm_b
 
-            tile_types = {}
-            for rect in floors:
-                tile_types[(rect.x, rect.y)] = "floor"
-            for rect in walls:
-                tile_types[(rect.x, rect.y)] = "wall"
-
             width = camera.map_width
             height = camera.map_height
 
@@ -618,21 +608,13 @@ class GameRenderer:
                     chance = progress ** 2
                     y = 0
                     while y < height:
-                        tile_x = int(x // TILE_SIZE) * TILE_SIZE
-                        tile_y = int(y // TILE_SIZE) * TILE_SIZE
-                        pos = (tile_x, tile_y)
+                        tx = int(x // TILE_SIZE) * TILE_SIZE
+                        ty = int(y // TILE_SIZE) * TILE_SIZE
+                        pos = (tx, ty)
                         if pos not in self.transition_mask:
                             self.transition_mask[pos] = (
                                 second_alg if random.random() < chance else first_alg
                             )
-                        alg = self.transition_mask[pos]
-                        t_type = tile_types.get(pos, "background")
-                        world_rect = pygame.Rect(tile_x, tile_y, TILE_SIZE, TILE_SIZE)
-                        pygame.draw.rect(
-                            self.surface,
-                            MAP_PALETTES[alg][t_type],
-                            self._scale_world_rect_to_screen(world_rect, camera)
-                        )
                         y += TILE_SIZE
                     x += TILE_SIZE
             elif layout == "vertical":
@@ -644,29 +626,39 @@ class GameRenderer:
                     chance = progress ** 2
                     x = 0
                     while x < width:
-                        tile_x = int(x // TILE_SIZE) * TILE_SIZE
-                        tile_y = int(y // TILE_SIZE) * TILE_SIZE
-                        pos = (tile_x, tile_y)
+                        tx = int(x // TILE_SIZE) * TILE_SIZE
+                        ty = int(y // TILE_SIZE) * TILE_SIZE
+                        pos = (tx, ty)
                         if pos not in self.transition_mask:
                             self.transition_mask[pos] = (
                                 second_alg if random.random() < chance else first_alg
                             )
-                        alg = self.transition_mask[pos]
-                        t_type = tile_types.get(pos, "background")
-                        world_rect = pygame.Rect(tile_x, tile_y, TILE_SIZE, TILE_SIZE)
-                        pygame.draw.rect(
-                            self.surface,
-                            MAP_PALETTES[alg][t_type],
-                            self._scale_world_rect_to_screen(world_rect, camera)
-                        )
                         x += TILE_SIZE
                     y += TILE_SIZE
 
-        # Portas (entrada e saída) com variação da cor da parede
+            for tile_x, tile_y in explored:
+                pos = (tile_x, tile_y)
+                world_rect = pygame.Rect(tile_x, tile_y, TILE_SIZE, TILE_SIZE)
+                if pos in self.transition_mask:
+                    alg = self.transition_mask[pos]
+                else:
+                    alg = self._get_algorithm_for_rect(
+                        world_rect, camera, algorithm_a, algorithm_b, layout, reverse
+                    )
+                t_type = tile_types.get(pos, "background")
+                pygame.draw.rect(
+                    self.surface,
+                    MAP_PALETTES[alg][t_type],
+                    self._scale_world_rect_to_screen(world_rect, camera)
+                )
+
+        # Portas (somente se já tiverem sido renderizadas/exploradas)
         for door in (entrance_door, exit_door):
             if door is None:
                 continue
             dx, dy = door["tile"]
+            if (dx, dy) not in explored:
+                continue
             door_world_rect = pygame.Rect(dx, dy, TILE_SIZE, TILE_SIZE)
             if level["type"] == "pure":
                 alg = level["algorithm"]
@@ -687,7 +679,7 @@ class GameRenderer:
                 self._scale_world_rect_to_screen(door_world_rect, camera)
             )
 
-        # Jogador (círculo vermelho na posição correspondente no mapa completo)
+        # Jogador (círculo vermelho na posição correspondente no mapa)
         px = int(player.x * screen_w / camera.map_width)
         py = int(player.y * screen_h / camera.map_height)
         scale_factor = min(screen_w / camera.map_width, screen_h / camera.map_height)

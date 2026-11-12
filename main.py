@@ -4,27 +4,50 @@ import sys
 import pygame
 from pygame.locals import QUIT
 
-from config import WIDTH, HEIGHT, FPS, TILE_SIZE
+from config import WIDTH, HEIGHT, FPS, TILE_SIZE, CHARACTER_OPTIONS
 from entities import Player
 from collisions import CollisionManager
-from rendering import GameRenderer, Camera
+from rendering import GameRenderer, Camera, StartMenu, PauseMenu, SettingsMenu
 from maps_generator import MapService
+from persistence import SaveManager
 
 
 class Game:
     def __init__(self):
         pygame.init()
 
-        self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
+        saved_settings = SaveManager.load_settings(WIDTH, HEIGHT, FPS)
+        self.window_width = saved_settings["width"]
+        self.window_height = saved_settings["height"]
+        self.fps = saved_settings["fps"]
+
+        self.screen = pygame.display.set_mode((self.window_width, self.window_height))
         pygame.display.set_caption(
             'Mapas com Geração Procedural - Roguelike'
         )
         self.clock = pygame.time.Clock()
 
         self.renderer = GameRenderer(self.screen)
-        self.camera = Camera()
+        self.settings_menu = SettingsMenu(
+            self.screen,
+            current_width=self.window_width,
+            current_height=self.window_height,
+            current_fps=self.fps,
+        )
+        self.menu = StartMenu(
+            self.screen,
+            settings_menu=self.settings_menu,
+            saved_game=SaveManager.load_game(),
+        )
+        self.pause_menu = PauseMenu(self.screen, self.settings_menu)
+        self.camera = Camera(
+            viewport_width=self.window_width,
+            viewport_height=self.window_height,
+        )
         self.collision_manager = CollisionManager()
         self.player = Player()
+        self.state = "menu"
+        self.selected_character = None
 
         self.master_seed = random.random()
         self.rng = random.Random(self.master_seed)
@@ -47,8 +70,6 @@ class Game:
         self.current_level_idx = -1
         self.map_view_dismissed = False
 
-        self._start_game()
-
     def _get_next_map_type(self, exclude=None):
         """
         Sorteia um algoritmo sem repetição dentro do ciclo atual.
@@ -68,9 +89,23 @@ class Game:
         print("Novo algoritmo puro:", map_type)
         return map_type
 
-    def _start_game(self):
-        """Cria o primeiro mapa puro da partida."""
-        map_type = self._get_next_map_type()
+    def _start_game(self, initial_map_type=None):
+        """Cria o primeiro mapa puro da partida (usando o mapa tema do personagem, se informado)."""
+        self.master_seed = random.random()
+        self.rng = random.Random(self.master_seed)
+        self.available_map_types = [0, 1, 2, 3]
+        self.levels_history.clear()
+        self.renderer.explored_tiles_by_level.clear()
+        self.renderer.tile_rotations.clear()
+        self.renderer.transition_mask.clear()
+
+        if initial_map_type is not None and initial_map_type in self.available_map_types:
+            self.available_map_types.remove(initial_map_type)
+            map_type = initial_map_type
+            print("Novo algoritmo puro (tema do personagem):", map_type)
+        else:
+            map_type = self._get_next_map_type()
+
         seed = self.rng.random()
 
         self.current_level_idx = 0
@@ -101,6 +136,74 @@ class Game:
             exit_side=exit_side,
             spawn_side=spawn_side
         )
+        self.save_current_game()
+
+    def save_current_game(self):
+        """Persiste o estado atual da partida localmente."""
+        if self.selected_character is None or not self.levels_history:
+            return
+        SaveManager.save_game(
+            selected_character=self.selected_character,
+            player=self.player,
+            master_seed=self.master_seed,
+            available_map_types=self.available_map_types,
+            levels_history=self.levels_history,
+            current_level_idx=self.current_level_idx,
+            explored_tiles_by_level=self.renderer.explored_tiles_by_level,
+        )
+
+    def load_saved_game(self) -> bool:
+        """Restaura uma partida salva localmente."""
+        save_data = SaveManager.load_game()
+        if not save_data:
+            return False
+
+        saved_char = save_data.get("character") or CHARACTER_OPTIONS[0]
+        # Garante compatibilidade com as opções atuais de personagem
+        char_id = saved_char.get("id")
+        matched_char = next(
+            (c for c in CHARACTER_OPTIONS if c["id"] == char_id),
+            saved_char,
+        )
+        self.selected_character = matched_char
+        self.renderer.set_player_sprite(matched_char["sprite_path"])
+
+        world = save_data["world"]
+        self.master_seed = world.get("master_seed", random.random())
+        self.rng = random.Random(self.master_seed)
+        self.available_map_types = list(world.get("available_map_types", [0, 1, 2, 3]))
+        self.levels_history = list(world.get("levels_history", []))
+        self.current_level_idx = int(world.get("current_level_idx", 0))
+
+        if not self.levels_history or not (0 <= self.current_level_idx < len(self.levels_history)):
+            return False
+
+        self.renderer.tile_rotations.clear()
+        self.renderer.transition_mask.clear()
+        self.renderer.explored_tiles_by_level.clear()
+
+        raw_explored = world.get("explored_tiles_by_level", {})
+        for lvl_str, coords in raw_explored.items():
+            try:
+                lvl_idx = int(lvl_str)
+                self.renderer.explored_tiles_by_level[lvl_idx] = {
+                    (int(pos[0]), int(pos[1])) for pos in coords
+                }
+            except (ValueError, TypeError):
+                continue
+
+        current_level = self.levels_history[self.current_level_idx]
+        self._load_level(current_level, spawn_mode=None)
+
+        player_data = save_data["player"]
+        self.player.set_position(
+            float(player_data.get("x", self.player.x)),
+            float(player_data.get("y", self.player.y)),
+        )
+        self.player.direction = player_data.get("direction", "down")
+        self.camera.update(self.player.x, self.player.y)
+
+        return True
 
     def _apply_map(
         self,
@@ -393,6 +496,7 @@ class Game:
             spawn_mode="entrance"
         )
 
+        self.save_current_game()
         self._print_level_info(level)
 
     def go_to_prev_level(self):
@@ -410,6 +514,7 @@ class Game:
             spawn_mode="exit"
         )
 
+        self.save_current_game()
         self._print_level_info(level)
 
     def _print_level_info(self, level):
@@ -432,11 +537,86 @@ class Game:
                 f"INTERMEDIÁRIO - {order} - {direction}"
             )
 
+    def apply_settings(self, width: int, height: int, fps: int):
+        """Aplica e persiste novas configurações de tamanho da janela e FPS."""
+        self.window_width = int(width)
+        self.window_height = int(height)
+        self.fps = int(fps)
+
+        self.screen = pygame.display.set_mode((self.window_width, self.window_height))
+        self.renderer.set_surface(self.screen)
+        self.menu.surface = self.screen
+        self.pause_menu.surface = self.screen
+        self.settings_menu.surface = self.screen
+
+        self.camera.viewport_width = self.window_width
+        self.camera.viewport_height = self.window_height
+        self.camera.update(self.player.x, self.player.y)
+
+        SaveManager.save_settings(self.window_width, self.window_height, self.fps)
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == QUIT:
+                if self.state in ("playing", "paused"):
+                    self.save_current_game()
                 pygame.quit()
                 sys.exit()
+
+            if self.state == "menu":
+                menu_result = self.menu.handle_event(
+                    event,
+                    self.window_width,
+                    self.window_height,
+                    self.fps,
+                )
+                if menu_result is not None:
+                    action = menu_result.get("action")
+                    if action == "continue":
+                        if self.load_saved_game():
+                            self.state = "playing"
+                    elif action == "new_game":
+                        chosen_character = menu_result["character"]
+                        self.selected_character = chosen_character
+                        self.renderer.set_player_sprite(chosen_character["sprite_path"])
+                        self._start_game(initial_map_type=chosen_character.get("theme_map"))
+                        self.state = "playing"
+                    elif action == "apply_settings":
+                        self.apply_settings(
+                            menu_result["width"],
+                            menu_result["height"],
+                            menu_result["fps"],
+                        )
+                    elif action == "quit":
+                        pygame.quit()
+                        sys.exit()
+
+            elif self.state == "playing":
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+                    self.pause_menu.reset()
+                    self.state = "paused"
+
+            elif self.state == "paused":
+                pause_result = self.pause_menu.handle_event(
+                    event,
+                    self.window_width,
+                    self.window_height,
+                    self.fps,
+                )
+                if pause_result is not None:
+                    action = pause_result.get("action")
+                    if action == "resume":
+                        self.state = "playing"
+                    elif action == "apply_settings":
+                        self.apply_settings(
+                            pause_result["width"],
+                            pause_result["height"],
+                            pause_result["fps"],
+                        )
+                    elif action == "main_menu":
+                        self.save_current_game()
+                        self.menu.refresh_save_state(SaveManager.load_game())
+                        self.state = "menu"
 
     def update_player(self, keys):
         target_x, target_y = self.player.calculate_desired_position(keys)
@@ -514,8 +694,28 @@ class Game:
 
     def run(self):
         while True:
-            self.clock.tick(FPS)
+            self.clock.tick(self.fps)
             self.handle_events()
+
+            if self.state == "menu":
+                self.menu.draw()
+                continue
+
+            if self.state == "paused":
+                self.renderer.render_frame(
+                    self.floors,
+                    self.walls,
+                    self.player,
+                    self.exit_door,
+                    self.entrance_door,
+                    self.current_level_idx,
+                    self.levels_history[self.current_level_idx],
+                    self.camera,
+                    show_full_map=False,
+                    flip_display=False,
+                )
+                self.pause_menu.draw()
+                continue
 
             keys = pygame.key.get_pressed()
             self.update_player(keys)
