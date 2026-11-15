@@ -4,9 +4,11 @@ from config import (
     SPRITE_SIZE,
     RESOLUTION_OPTIONS,
     PROCESSING_SPEED_OPTIONS,
+    VOLUME_OPTIONS,
     WIDTH,
     HEIGHT,
     FPS,
+    VOLUME,
 )
 from persistence import get_resource_path
 
@@ -25,6 +27,7 @@ class SettingsMenu:
         current_width: int = WIDTH,
         current_height: int = HEIGHT,
         current_fps: int = FPS,
+        current_volume: float = VOLUME,
     ):
         self.surface = surface
         pygame.font.init()
@@ -36,10 +39,12 @@ class SettingsMenu:
 
         self.resolutions = RESOLUTION_OPTIONS
         self.speed_options = PROCESSING_SPEED_OPTIONS
+        self.volume_options = VOLUME_OPTIONS
 
         self.res_idx = 0
         self.fps_idx = 0
-        self.selected_row = 0  # 0 = Resolução, 1 = FPS, 2 = Aplicar, 3 = Voltar
+        self.vol_idx = 0
+        self.selected_row = 0  # 0 = Resolução, 1 = Velocidade, 2 = Volume, 3 = Aplicar, 4 = Voltar
 
         self.row_rects = []
         self.left_arrow_rects = {}
@@ -47,9 +52,11 @@ class SettingsMenu:
         self.apply_btn_rect = pygame.Rect(0, 0, 230, 50)
         self.back_btn_rect = pygame.Rect(0, 0, 230, 50)
 
-        self.sync_current_values(current_width, current_height, current_fps)
+        self.sync_current_values(current_width, current_height, current_fps, current_volume)
 
-    def sync_current_values(self, width: int, height: int, fps: int):
+    def sync_current_values(
+        self, width: int, height: int, fps: int, volume: float = None
+    ):
         if (width, height) in self.resolutions:
             self.res_idx = self.resolutions.index((width, height))
         else:
@@ -60,6 +67,11 @@ class SettingsMenu:
             range(len(self.speed_options)),
             key=lambda i: abs(self.speed_options[i] - mult),
         )
+        if volume is not None:
+            self.vol_idx = min(
+                range(len(self.volume_options)),
+                key=lambda i: abs(self.volume_options[i] - volume),
+            )
 
         self.selected_row = 0
 
@@ -73,24 +85,26 @@ class SettingsMenu:
         center_x = screen_w // 2
 
         res_rect = pygame.Rect(center_x - panel_w // 2, start_y, panel_w, row_h)
-        fps_rect = pygame.Rect(center_x - panel_w // 2, start_y + 90, panel_w, row_h)
+        fps_rect = pygame.Rect(center_x - panel_w // 2, start_y + 82, panel_w, row_h)
+        vol_rect = pygame.Rect(center_x - panel_w // 2, start_y + 164, panel_w, row_h)
 
         btn_w = 220
         btn_h = 52
-        btn_y = start_y + 200
+        btn_y = start_y + 256
         self.back_btn_rect = pygame.Rect(center_x - btn_w - 16, btn_y, btn_w, btn_h)
         self.apply_btn_rect = pygame.Rect(center_x + 16, btn_y, btn_w, btn_h)
 
         self.row_rects = [
             res_rect,
             fps_rect,
+            vol_rect,
             self.apply_btn_rect,
             self.back_btn_rect,
         ]
 
-        # Botões "<" e ">" dentro das linhas 0 e 1
+        # Botões "<" e ">" dentro das linhas 0, 1 e 2
         arrow_size = 42
-        for row_idx, r in enumerate((res_rect, fps_rect)):
+        for row_idx, r in enumerate((res_rect, fps_rect, vol_rect)):
             right_arrow = pygame.Rect(
                 r.right - arrow_size - 16,
                 r.centery - arrow_size // 2,
@@ -111,16 +125,20 @@ class SettingsMenu:
             self.res_idx = (self.res_idx + step) % len(self.resolutions)
         elif row == 1:
             self.fps_idx = (self.fps_idx + step) % len(self.speed_options)
+        elif row == 2:
+            self.vol_idx = (self.vol_idx + step) % len(self.volume_options)
 
     def _build_apply_result(self) -> dict:
         w, h = self.resolutions[self.res_idx]
         mult = self.speed_options[self.fps_idx]
         fps = max(1, int(round(FPS * mult)))
+        vol = self.volume_options[self.vol_idx]
         return {
             "action": "apply_settings",
             "width": w,
             "height": h,
             "fps": fps,
+            "volume": vol,
         }
 
     def handle_event(self, event: pygame.event.Event):
@@ -131,29 +149,29 @@ class SettingsMenu:
                 return {"action": "back"}
 
             if event.key in (pygame.K_UP, pygame.K_w):
-                self.selected_row = (self.selected_row - 1) % 4
+                self.selected_row = (self.selected_row - 1) % 5
             elif event.key in (pygame.K_DOWN, pygame.K_s):
-                self.selected_row = (self.selected_row + 1) % 4
+                self.selected_row = (self.selected_row + 1) % 5
             elif event.key in (pygame.K_LEFT, pygame.K_a):
-                if self.selected_row in (0, 1):
+                if self.selected_row in (0, 1, 2):
                     self._change_value(self.selected_row, -1)
-                elif self.selected_row == 2:
-                    self.selected_row = 3
                 elif self.selected_row == 3:
-                    self.selected_row = 2
+                    self.selected_row = 4
+                elif self.selected_row == 4:
+                    self.selected_row = 3
             elif event.key in (pygame.K_RIGHT, pygame.K_d):
-                if self.selected_row in (0, 1):
+                if self.selected_row in (0, 1, 2):
                     self._change_value(self.selected_row, 1)
-                elif self.selected_row == 2:
+                elif self.selected_row == 3:
+                    self.selected_row = 4
+                elif self.selected_row == 4:
                     self.selected_row = 3
-                elif self.selected_row == 3:
-                    self.selected_row = 2
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
-                if self.selected_row in (0, 1):
+                if self.selected_row in (0, 1, 2):
                     self._change_value(self.selected_row, 1)
-                elif self.selected_row == 2:
-                    return self._build_apply_result()
                 elif self.selected_row == 3:
+                    return self._build_apply_result()
+                elif self.selected_row == 4:
                     return {"action": "back"}
 
         elif event.type == pygame.MOUSEMOTION:
@@ -163,7 +181,7 @@ class SettingsMenu:
                     break
 
         elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            for row_idx in (0, 1):
+            for row_idx in (0, 1, 2):
                 if self.left_arrow_rects[row_idx].collidepoint(event.pos):
                     self.selected_row = row_idx
                     self._change_value(row_idx, -1)
@@ -190,7 +208,7 @@ class SettingsMenu:
 
         # Caixa central quando em overlay (pause)
         panel_w = min(680, screen_w - 30)
-        panel_h = 420
+        panel_h = 500
         panel_rect = pygame.Rect(
             (screen_w - panel_w) // 2,
             (screen_h - panel_h) // 2,
@@ -224,10 +242,13 @@ class SettingsMenu:
         w, h = self.resolutions[self.res_idx]
         mult = self.speed_options[self.fps_idx]
         speed_label = f"{mult:g}x".replace(".", ",")
+        vol = self.volume_options[self.vol_idx]
+        vol_label = f"{int(round(vol * 100))}%"
 
         rows_data = [
             ("Tamanho da Janela", f"{w} x {h}"),
             ("Velocidade de Processamento", speed_label),
+            ("Volume", vol_label),
         ]
 
         for row_idx, (label_text, val_text) in enumerate(rows_data):
@@ -283,7 +304,7 @@ class SettingsMenu:
             )
 
         # Botão Voltar
-        is_back_sel = self.selected_row == 3
+        is_back_sel = self.selected_row == 4
         pygame.draw.rect(
             self.surface,
             (46, 52, 72) if is_back_sel else (32, 36, 50),
@@ -303,7 +324,7 @@ class SettingsMenu:
         )
 
         # Botão Aplicar
-        is_apply_sel = self.selected_row == 2
+        is_apply_sel = self.selected_row == 3
         pygame.draw.rect(
             self.surface,
             (15, 227, 208) if is_apply_sel else (12, 165, 152),
@@ -323,15 +344,26 @@ class SettingsMenu:
             apply_surf, apply_surf.get_rect(center=self.apply_btn_rect.center)
         )
 
-        hint_surf = self.hint_font.render(
-            "[W/S] Linha   |   [A/D ou Setas] Alterar Valor   |   [ENTER] Confirmar   |   [ESC] Voltar",
-            True,
-            (145, 152, 175),
-        )
-        hint_y = panel_rect.bottom - 24 if overlay_mode else screen_h - 32
-        self.surface.blit(
-            hint_surf, hint_surf.get_rect(center=(screen_w // 2, hint_y))
-        )
+        if overlay_mode:
+            hint_lines = [
+                "[W/S] Linha  |  [A/D ou Setas] Alterar Valor",
+                "[ENTER] Confirmar  |  [ESC] Voltar",
+            ]
+            for idx_line, line_text in enumerate(hint_lines):
+                hint_surf = self.hint_font.render(line_text, True, (145, 152, 175))
+                hint_y = panel_rect.bottom - 38 + idx_line * 20
+                self.surface.blit(
+                    hint_surf, hint_surf.get_rect(center=(screen_w // 2, hint_y))
+                )
+        else:
+            hint_surf = self.hint_font.render(
+                "[W/S] Linha   |   [A/D ou Setas] Alterar Valor   |   [ENTER] Confirmar   |   [ESC] Voltar",
+                True,
+                (145, 152, 175),
+            )
+            self.surface.blit(
+                hint_surf, hint_surf.get_rect(center=(screen_w // 2, screen_h - 32))
+            )
 
 
 class PauseMenu:

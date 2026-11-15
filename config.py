@@ -4,6 +4,7 @@
 WIDTH = 1280
 HEIGHT = 720
 FPS = 120
+VOLUME = 0.5
 
 RESOLUTION_OPTIONS = [
     (640, 360),
@@ -20,6 +21,14 @@ RESOLUTION_OPTIONS = [
 ]
 
 PROCESSING_SPEED_OPTIONS = [0.25, 0.3, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0]
+VOLUME_OPTIONS = [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
+
+SOUNDTRACK_PATHS = {
+    0: "assets/Audios/SoundTrack_0.mp3",
+    1: "assets/Audios/SoundTrack_1.mp3",
+    2: "assets/Audios/SoundTrack_2.mp3",
+    3: "assets/Audios/SoundTrack_3.mp3",
+}
 
 # Configurações do mapa e grid
 TILE_SIZE = 180
@@ -29,7 +38,7 @@ MIN_LEAF_SIZE = 8
 
 # Configurações do jogador (proporcionais ao tamanho do tile)
 PLAYER_SPEED = TILE_SIZE * 0.025
-PLAYER_SPRITE_PATH = "assets/PlayerSprites/ElectricCiborgue.png"
+PLAYER_SPRITE_PATH = "assets/Images/PlayerSprites/ElectricCiborgue.png"
 PLAYER_SPRITE_SIZE = int(TILE_SIZE * 0.4)
 PLAYER_HITBOX_WIDTH = int(PLAYER_SPRITE_SIZE * 0.68)
 PLAYER_HITBOX_HEIGHT = int(PLAYER_SPRITE_SIZE * 0.94)
@@ -45,7 +54,7 @@ CHARACTER_OPTIONS = [
         "lore": "Em um futuro distante, onde a humanidade foi dominada por robôs e pela alta tecnologia, o Ciborgue utiliza sua parte mecânica para enfrentá-los de igual para igual. Entretanto, o que realmente o diferencia é sua humanidade: sua capacidade de adaptação o coloca à frente de seus oponentes. Para os poucos humanos que ainda restam, ele se tornou um símbolo de esperança.",
         "affinity": "Eletricidade",
         "weakness": "Radiação",
-        "sprite_path": "assets/PlayerSprites/ElectricCiborgue.png",
+        "sprite_path": "assets/Images/PlayerSprites/ElectricCiborgue.png",
         "accent_color": (15, 227, 208),
         "theme_map": 3,  # Híbrido
     },
@@ -57,7 +66,7 @@ CHARACTER_OPTIONS = [
         "lore": "Em um castelo em ruínas, cercado por chamas e lava, vaga um forte cavaleiro de um reino que já não existe. Especialista em combate corpo a corpo, mesmo sem ter a quem servir, continua lutando em nome da honra de seu reino e na esperança de um dia vingá-lo.",
         "affinity": "Fogo",
         "weakness": "Eletricidade",
-        "sprite_path": "assets/PlayerSprites/FireKnight.png",
+        "sprite_path": "assets/Images/PlayerSprites/FireKnight.png",
         "accent_color": (255, 110, 40),
         "theme_map": 2,  # BSP
     },
@@ -69,7 +78,7 @@ CHARACTER_OPTIONS = [
         "lore": "Em um bosque encantado, habitado por criaturas mágicas e repleto de toxinas fatais, a Druida utiliza a magia arcana e sua conexão com a natureza para combater qualquer um que ouse ameaçar seu lar. Para ela, a floresta não é apenas seu lar, mas parte de quem ela é.",
         "affinity": "Veneno",
         "weakness": "Fogo",
-        "sprite_path": "assets/PlayerSprites/PoisonDruid.png",
+        "sprite_path": "assets/Images/PlayerSprites/PoisonDruid.png",
         "accent_color": (32, 207, 7),
         "theme_map": 0,  # Random Walk
     },
@@ -81,7 +90,7 @@ CHARACTER_OPTIONS = [
         "lore": "Após uma guerra nuclear, a vida na Terra nunca mais foi a mesma. Em meio aos destroços e à radiação, vaga uma figura misteriosa e encapuzada, munida de armas e explosivos improvisados. Em um mundo repleto de criaturas mutantes, poucos são capazes de representar uma ameaça tão grande quanto ele. E menos ainda sobreviveram para contar a história.",
         "affinity": "Radiação",
         "weakness": "Veneno",
-        "sprite_path": "assets/PlayerSprites/RadSurvivor.png",
+        "sprite_path": "assets/Images/PlayerSprites/RadSurvivor.png",
         "accent_color": (195, 215, 25),
         "theme_map": 1,  # Cellular Automata
     },
@@ -91,8 +100,8 @@ CHARACTER_OPTIONS = [
 MIN_DOOR_DISTANCE_TILES = 25
 
 # Configurações do Tileset (4x4 sprites de 64x64 pixels) e sprites de personagem (32x32)
-MAPTILES_PATH = "assets/MapTiles.png"
-OBSTACLES_PATH = "assets/Obstacles.png"
+MAPTILES_PATH = "assets/Images/MapTiles.png"
+OBSTACLES_PATH = "assets/Images/Obstacles.png"
 OBSTACLE_SPAWN_CHANCE = 0.02
 EFFECT_ANIMATION_COOLDOWN = 500
 EFFECT_DURATION_MS = 3000

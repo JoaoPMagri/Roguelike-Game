@@ -4,22 +4,43 @@ import sys
 import pygame
 from pygame.locals import QUIT
 
-from config import WIDTH, HEIGHT, FPS, TILE_SIZE, CHARACTER_OPTIONS, EFFECT_DURATION_MS
+from config import (
+    WIDTH,
+    HEIGHT,
+    FPS,
+    VOLUME,
+    TILE_SIZE,
+    CHARACTER_OPTIONS,
+    EFFECT_DURATION_MS,
+    SOUNDTRACK_PATHS,
+)
 from entities import Player
 from collisions import CollisionManager
 from rendering import GameRenderer, Camera, StartMenu, PauseMenu, SettingsMenu
 from maps_generator import MapService
-from persistence import SaveManager
+from persistence import SaveManager, get_resource_path
 
 
 class Game:
     def __init__(self):
         pygame.init()
+        try:
+            pygame.mixer.init()
+            pygame.mixer.set_reserved(2)
+            self.audio_available = True
+            self.mixed_channels = (pygame.mixer.Channel(0), pygame.mixer.Channel(1))
+        except pygame.error:
+            self.audio_available = False
+            self.mixed_channels = None
 
-        saved_settings = SaveManager.load_settings(WIDTH, HEIGHT, FPS)
+        saved_settings = SaveManager.load_settings(WIDTH, HEIGHT, FPS, VOLUME)
         self.window_width = saved_settings["width"]
         self.window_height = saved_settings["height"]
         self.fps = saved_settings["fps"]
+        self.current_volume = saved_settings["volume"]
+        self.current_track_idx = None
+        self.current_mixed_tracks = None
+        self.soundtrack_sounds = {}
 
         self.screen = pygame.display.set_mode((self.window_width, self.window_height))
         pygame.display.set_caption(
@@ -33,6 +54,7 @@ class Game:
             current_width=self.window_width,
             current_height=self.window_height,
             current_fps=self.fps,
+            current_volume=self.current_volume,
         )
         self.menu = StartMenu(
             self.screen,
@@ -210,6 +232,9 @@ class Game:
         )
         self.player.direction = player_data.get("direction", "down")
         self.camera.update(self.player.x, self.player.y)
+        if 0 <= self.current_level_idx < len(self.levels_history):
+            self._play_soundtrack_for_level(self.levels_history[self.current_level_idx])
+        self._play_soundtrack_for_level(self.levels_history[self.current_level_idx])
 
         return True
 
@@ -270,6 +295,8 @@ class Game:
             mapa.height * TILE_SIZE
         )
         self.camera.update(self.player.x, self.player.y)
+        if 0 <= self.current_level_idx < len(self.levels_history):
+            self._play_soundtrack_for_level(self.levels_history[self.current_level_idx])
 
     def _generate_and_apply_pure_map(
         self,
@@ -547,11 +574,19 @@ class Game:
                 f"INTERMEDIÁRIO - {order} - {direction}"
             )
 
-    def apply_settings(self, width: int, height: int, fps: int):
-        """Aplica e persiste novas configurações de tamanho da janela e FPS."""
+    def apply_settings(self, width: int, height: int, fps: int, volume: float = None):
+        """Aplica e persiste novas configurações de janela, FPS e volume."""
         self.window_width = int(width)
         self.window_height = int(height)
         self.fps = int(fps)
+        if volume is not None:
+            self.current_volume = max(0.0, min(1.0, float(volume)))
+            if self.audio_available:
+                pygame.mixer.music.set_volume(self.current_volume)
+                if self.levels_history:
+                    self._update_mixed_soundtrack_volume(
+                        self.levels_history[self.current_level_idx]
+                    )
 
         self.screen = pygame.display.set_mode((self.window_width, self.window_height))
         self.renderer.set_surface(self.screen)
@@ -562,8 +597,102 @@ class Game:
         self.camera.viewport_width = self.window_width
         self.camera.viewport_height = self.window_height
         self.camera.update(self.player.x, self.player.y)
+        if 0 <= self.current_level_idx < len(self.levels_history):
+            self._play_soundtrack_for_level(self.levels_history[self.current_level_idx])
 
-        SaveManager.save_settings(self.window_width, self.window_height, self.fps)
+        SaveManager.save_settings(
+            self.window_width, self.window_height, self.fps, self.current_volume
+        )
+
+    def _get_soundtrack_sound(self, track_idx: int):
+        """Carrega e armazena em cache um Sound para crossfade em mapas mistos."""
+        if track_idx in self.soundtrack_sounds:
+            return self.soundtrack_sounds[track_idx]
+        rel_path = SOUNDTRACK_PATHS.get(track_idx)
+        if not rel_path:
+            return None
+        try:
+            snd = pygame.mixer.Sound(get_resource_path(rel_path))
+            self.soundtrack_sounds[track_idx] = snd
+            return snd
+        except pygame.error as exc:
+            print(f"Erro ao carregar trilha sonora {rel_path}: {exc}")
+            return None
+
+    def _update_mixed_soundtrack_volume(self, level: dict):
+        """Ajusta o volume das duas trilhas de um mapa misto conforme a posição do jogador."""
+        if (
+            not self.audio_available
+            or not self.mixed_channels
+            or not level
+            or level.get("type") == "pure"
+            or self.current_mixed_tracks is None
+        ):
+            return
+
+        if level.get("layout") == "horizontal":
+            t = self.player.x / max(1, self.camera.map_width)
+        else:
+            t = self.player.y / max(1, self.camera.map_height)
+
+        t = max(0.0, min(1.0, t))
+        if level.get("reverse", False):
+            t = 1.0 - t
+
+        self.mixed_channels[0].set_volume(self.current_volume * (1.0 - t))
+        self.mixed_channels[1].set_volume(self.current_volume * t)
+
+    def _stop_soundtrack(self):
+        """Para qualquer trilha sonora em execução (pura ou mista)."""
+        if not self.audio_available:
+            return
+        pygame.mixer.music.stop()
+        if self.mixed_channels:
+            self.mixed_channels[0].stop()
+            self.mixed_channels[1].stop()
+        self.current_track_idx = None
+        self.current_mixed_tracks = None
+
+    def _play_soundtrack_for_level(self, level: dict):
+        """Toca em loop a trilha sonora correspondente ao mapa atual."""
+        if not self.audio_available or not level:
+            return
+
+        if level.get("type") != "pure":
+            pygame.mixer.music.stop()
+            self.current_track_idx = None
+            algo_a = level.get("algorithm_a", 0)
+            algo_b = level.get("algorithm_b", 0)
+            if (algo_a, algo_b) != self.current_mixed_tracks and self.mixed_channels:
+                snd_a = self._get_soundtrack_sound(algo_a)
+                snd_b = self._get_soundtrack_sound(algo_b)
+                if snd_a is not None:
+                    self.mixed_channels[0].play(snd_a, loops=-1)
+                if snd_b is not None:
+                    self.mixed_channels[1].play(snd_b, loops=-1)
+                self.current_mixed_tracks = (algo_a, algo_b)
+            self._update_mixed_soundtrack_volume(level)
+            return
+
+        if self.current_mixed_tracks is not None and self.mixed_channels:
+            self.mixed_channels[0].stop()
+            self.mixed_channels[1].stop()
+            self.current_mixed_tracks = None
+
+        track_idx = level.get("algorithm", 0)
+        if track_idx == self.current_track_idx:
+            return
+
+        rel_path = SOUNDTRACK_PATHS.get(track_idx)
+        if not rel_path:
+            return
+        try:
+            pygame.mixer.music.load(get_resource_path(rel_path))
+            pygame.mixer.music.set_volume(self.current_volume)
+            pygame.mixer.music.play(-1)
+            self.current_track_idx = track_idx
+        except pygame.error as exc:
+            print(f"Erro ao carregar trilha sonora {rel_path}: {exc}")
 
     def _get_active_map_snapshot(self) -> dict:
         """Retorna os dados do mapa atualmente exibido no TAB para animar a transição."""
@@ -684,6 +813,7 @@ class Game:
                             menu_result["width"],
                             menu_result["height"],
                             menu_result["fps"],
+                            menu_result.get("volume"),
                         )
                     elif action == "quit":
                         pygame.quit()
@@ -751,8 +881,10 @@ class Game:
                             pause_result["width"],
                             pause_result["height"],
                             pause_result["fps"],
+                            pause_result.get("volume"),
                         )
                     elif action == "main_menu":
+                        self._stop_soundtrack()
                         self.save_current_game()
                         self.menu.refresh_saves(SaveManager.list_saves())
                         self.state = "menu"
@@ -886,6 +1018,9 @@ class Game:
                 self.preview_data = None
                 self.map_transition = None
                 self.update_player(keys)
+                self._update_mixed_soundtrack_volume(
+                    self.levels_history[self.current_level_idx]
+                )
             self.camera.update(self.player.x, self.player.y)
 
             if show_full_map and self.map_transition is not None:
