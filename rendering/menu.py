@@ -3,7 +3,7 @@ from config import (
     CHARACTER_OPTIONS,
     SPRITE_SIZE,
     RESOLUTION_OPTIONS,
-    FPS_OPTIONS,
+    PROCESSING_SPEED_OPTIONS,
     WIDTH,
     HEIGHT,
     FPS,
@@ -32,10 +32,10 @@ class SettingsMenu:
         self.title_font = pygame.font.SysFont("consolas", 36, bold=True)
         self.label_font = pygame.font.SysFont("consolas", 22, bold=True)
         self.value_font = pygame.font.SysFont("consolas", 22, bold=True)
-        self.hint_font = pygame.font.SysFont("consolas", 17)
+        self.hint_font = pygame.font.SysFont("consolas", 15)
 
         self.resolutions = RESOLUTION_OPTIONS
-        self.fps_options = FPS_OPTIONS
+        self.speed_options = PROCESSING_SPEED_OPTIONS
 
         self.res_idx = 0
         self.fps_idx = 0
@@ -55,10 +55,11 @@ class SettingsMenu:
         else:
             self.res_idx = 0
 
-        if fps in self.fps_options:
-            self.fps_idx = self.fps_options.index(fps)
-        else:
-            self.fps_idx = 0
+        mult = fps / FPS
+        self.fps_idx = min(
+            range(len(self.speed_options)),
+            key=lambda i: abs(self.speed_options[i] - mult),
+        )
 
         self.selected_row = 0
 
@@ -109,11 +110,12 @@ class SettingsMenu:
         if row == 0:
             self.res_idx = (self.res_idx + step) % len(self.resolutions)
         elif row == 1:
-            self.fps_idx = (self.fps_idx + step) % len(self.fps_options)
+            self.fps_idx = (self.fps_idx + step) % len(self.speed_options)
 
     def _build_apply_result(self) -> dict:
         w, h = self.resolutions[self.res_idx]
-        fps = self.fps_options[self.fps_idx]
+        mult = self.speed_options[self.fps_idx]
+        fps = max(1, int(round(FPS * mult)))
         return {
             "action": "apply_settings",
             "width": w,
@@ -220,11 +222,12 @@ class SettingsMenu:
         self.surface.blit(title_surf, title_rect)
 
         w, h = self.resolutions[self.res_idx]
-        fps = self.fps_options[self.fps_idx]
+        mult = self.speed_options[self.fps_idx]
+        speed_label = f"{mult:g}x".replace(".", ",")
 
         rows_data = [
             ("Tamanho da Janela", f"{w} x {h}"),
-            ("Limite de FPS", f"{fps} FPS"),
+            ("Velocidade de Processamento", speed_label),
         ]
 
         for row_idx, (label_text, val_text) in enumerate(rows_data):
@@ -347,7 +350,7 @@ class PauseMenu:
 
         self.title_font = pygame.font.SysFont("consolas", 40, bold=True)
         self.option_font = pygame.font.SysFont("consolas", 22, bold=True)
-        self.hint_font = pygame.font.SysFont("consolas", 17)
+        self.hint_font = pygame.font.SysFont("consolas", 15)
 
         self.mode = "main"  # "main" ou "settings"
         self.selected_idx = 0
@@ -515,15 +518,17 @@ class PauseMenu:
             lbl_surf = self.option_font.render(opt["label"], True, text_color)
             self.surface.blit(lbl_surf, lbl_surf.get_rect(center=rect.center))
 
-        hint_surf = self.hint_font.render(
-            "[W/S] Navegar   |   [ENTER] Confirmar   |   [ESC] Continuar",
-            True,
-            (145, 152, 175),
-        )
-        self.surface.blit(
-            hint_surf,
-            hint_surf.get_rect(center=(screen_w // 2, panel_rect.bottom - 22)),
-        )
+        hint_lines = [
+            "[W/S] Navegar  |  [ENTER] Confirmar",
+            "[ESC] Continuar",
+        ]
+        for idx_line, line_text in enumerate(hint_lines):
+            hint_surf = self.hint_font.render(line_text, True, (145, 152, 175))
+            y_pos = panel_rect.bottom - 32 + idx_line * 18
+            self.surface.blit(
+                hint_surf,
+                hint_surf.get_rect(center=(screen_w // 2, y_pos)),
+            )
 
         pygame.display.update()
 
@@ -531,9 +536,10 @@ class PauseMenu:
 class StartMenu:
     """
     Menu inicial:
-    1. Tela principal ("main"): Continuar, Novo Jogo, Configurações, Sair.
-    2. Seleção de personagem ("character_select"): escolha entre os 4 personagens.
-    3. Configurações ("settings"): ajuste de janela e FPS.
+    1. Tela principal ("main"): Jogar, Configurações, Sair.
+    2. Seleção de save ("save_select"): 4 cards de slots (carregar, novo jogo ou excluir).
+    3. Seleção de personagem ("character_select"): escolha entre os 4 personagens.
+    4. Configurações ("settings"): ajuste de janela e FPS.
     """
 
     PREVIEW_SIZE = 128
@@ -544,7 +550,7 @@ class StartMenu:
         self,
         surface: pygame.Surface,
         settings_menu: SettingsMenu,
-        saved_game: dict = None,
+        saves: list = None,
     ):
         self.surface = surface
         self.settings_menu = settings_menu
@@ -562,39 +568,42 @@ class StartMenu:
 
         self.previews = self._load_character_previews()
         self.card_rects = []
+        self.save_card_rects = []
+        self.delete_button_rects = []
+        self.save_back_button_rect = pygame.Rect(0, 0, 220, 48)
         self.start_button_rect = pygame.Rect(0, 0, 260, 54)
         self.back_button_rect = pygame.Rect(0, 0, 160, 44)
+        self.detail_start_rect = pygame.Rect(0, 0, 240, 50)
+        self.detail_back_rect = pygame.Rect(0, 0, 200, 50)
+        self.detail_selected_btn = 0
 
         self.screen_mode = "main"
-        self.saved_game = saved_game
+        self.saves = saves if saves is not None else [None, None, None, None]
+        self.selected_slot_idx = 0
+        self.selected_save_slot = 1
         self.main_options = []
         self.main_button_rects = []
         self.main_selected_idx = 0
-        self.refresh_save_state(saved_game)
+        self.refresh_saves(self.saves)
 
-    def refresh_save_state(self, saved_game: dict = None):
-        """Atualiza o estado do save e posiciona o cursor inicial do menu principal."""
-        self.saved_game = saved_game
-        self.screen_mode = "main"
+    def refresh_saves(self, saves: list, reset_to_main: bool = True):
+        """Atualiza os 4 slots de save exibidos no menu."""
+        self.saves = saves if saves is not None else [None, None, None, None]
+        if reset_to_main:
+            self.screen_mode = "main"
 
-        has_save = self.saved_game is not None
-        save_subtitle = None
-        if has_save:
-            char_name = self.saved_game.get("character", {}).get("name", "Personagem")
-            lvl = self.saved_game.get("world", {}).get("current_level_idx", 0) + 1
-            save_subtitle = f"{char_name}  •  Fase {lvl}"
+        occupied_count = sum(1 for s in self.saves if s is not None)
+        play_subtitle = (
+            f"{occupied_count}/4 slots ocupados"
+            if occupied_count > 0
+            else "Escolher um slot para iniciar"
+        )
 
         self.main_options = [
             {
-                "id": "continue",
-                "label": "CONTINUAR",
-                "subtitle": save_subtitle,
-                "enabled": has_save,
-            },
-            {
-                "id": "new_game",
-                "label": "NOVO JOGO",
-                "subtitle": "Escolher personagem e iniciar nova jornada",
+                "id": "play",
+                "label": "JOGAR",
+                "subtitle": play_subtitle,
                 "enabled": True,
             },
             {
@@ -611,7 +620,7 @@ class StartMenu:
             },
         ]
 
-        self.main_selected_idx = 0 if has_save else 1
+        self.main_selected_idx = 0
 
     def _load_character_previews(self) -> list[list[pygame.Surface]]:
         """Carrega os 4 frames frontais (linha 0) de cada personagem para o menu."""
@@ -666,7 +675,19 @@ class StartMenu:
             for i in range(count)
         ]
 
+        self.save_card_rects = list(self.card_rects)
+        self.delete_button_rects = [
+            pygame.Rect(r.x + 24, r.bottom - 42, r.width - 48, 30)
+            for r in self.save_card_rects
+        ]
+
         btn_y = min(screen_h - 75, card_y + card_h + 22)
+        self.save_back_button_rect = pygame.Rect(
+            screen_w // 2 - 110,
+            btn_y,
+            220,
+            48,
+        )
         self.start_button_rect = pygame.Rect(
             screen_w // 2 + 10,
             btn_y,
@@ -696,10 +717,8 @@ class StartMenu:
         current_height: int,
         current_fps: int,
     ):
-        if option_id == "continue":
-            return {"action": "continue"}
-        if option_id == "new_game":
-            self.screen_mode = "character_select"
+        if option_id == "play":
+            self.screen_mode = "save_select"
             return None
         if option_id == "settings":
             self.settings_menu.sync_current_values(
@@ -766,20 +785,73 @@ class StartMenu:
 
             return None
 
+        if self.screen_mode == "character_detail":
+            return self._handle_character_detail_event(event)
+
+        if self.screen_mode == "save_select":
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.screen_mode = "main"
+                    return None
+                if event.key in (pygame.K_LEFT, pygame.K_a):
+                    self.selected_slot_idx = (self.selected_slot_idx - 1) % 4
+                elif event.key in (pygame.K_RIGHT, pygame.K_d):
+                    self.selected_slot_idx = (self.selected_slot_idx + 1) % 4
+                elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
+                    if self.saves[self.selected_slot_idx] is not None:
+                        return {
+                            "action": "delete_slot",
+                            "slot": self.selected_slot_idx + 1,
+                        }
+                elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                    slot_num = self.selected_slot_idx + 1
+                    if self.saves[self.selected_slot_idx] is not None:
+                        return {"action": "load_slot", "slot": slot_num}
+                    self.selected_save_slot = slot_num
+                    self.screen_mode = "character_select"
+                    return None
+
+            elif event.type == pygame.MOUSEMOTION:
+                for idx, rect in enumerate(self.save_card_rects):
+                    if rect.collidepoint(event.pos):
+                        self.selected_slot_idx = idx
+                        break
+
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for idx, del_rect in enumerate(self.delete_button_rects):
+                    if self.saves[idx] is not None and del_rect.collidepoint(event.pos):
+                        self.selected_slot_idx = idx
+                        return {"action": "delete_slot", "slot": idx + 1}
+
+                for idx, rect in enumerate(self.save_card_rects):
+                    if rect.collidepoint(event.pos):
+                        self.selected_slot_idx = idx
+                        slot_num = idx + 1
+                        if self.saves[idx] is not None:
+                            return {"action": "load_slot", "slot": slot_num}
+                        self.selected_save_slot = slot_num
+                        self.screen_mode = "character_select"
+                        return None
+
+                if self.save_back_button_rect.collidepoint(event.pos):
+                    self.screen_mode = "main"
+                    return None
+
+            return None
+
         # Seleção de personagem
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                self.screen_mode = "main"
+                self.screen_mode = "save_select"
                 return None
             if event.key in (pygame.K_LEFT, pygame.K_a):
                 self.selected_idx = (self.selected_idx - 1) % len(self.characters)
             elif event.key in (pygame.K_RIGHT, pygame.K_d):
                 self.selected_idx = (self.selected_idx + 1) % len(self.characters)
             elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
-                return {
-                    "action": "new_game",
-                    "character": self.characters[self.selected_idx],
-                }
+                self.screen_mode = "character_detail"
+                self.detail_selected_btn = 0
+                return None
 
         elif event.type == pygame.MOUSEMOTION:
             for idx, rect in enumerate(self.card_rects):
@@ -791,19 +863,62 @@ class StartMenu:
             for idx, rect in enumerate(self.card_rects):
                 if rect.collidepoint(event.pos):
                     self.selected_idx = idx
+                    self.screen_mode = "character_detail"
+                    self.detail_selected_btn = 0
+                    return None
+
+            if self.start_button_rect.collidepoint(event.pos):
+                self.screen_mode = "character_detail"
+                self.detail_selected_btn = 0
+                return None
+
+            if self.back_button_rect.collidepoint(event.pos):
+                self.screen_mode = "save_select"
+                return None
+
+        return None
+
+    def _handle_character_detail_event(self, event: pygame.event.Event):
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.screen_mode = "character_select"
+                return None
+            if event.key in (
+                pygame.K_LEFT,
+                pygame.K_a,
+                pygame.K_RIGHT,
+                pygame.K_d,
+                pygame.K_UP,
+                pygame.K_w,
+                pygame.K_DOWN,
+                pygame.K_s,
+            ):
+                self.detail_selected_btn = 1 - self.detail_selected_btn
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+                if self.detail_selected_btn == 0:
                     return {
                         "action": "new_game",
                         "character": self.characters[self.selected_idx],
+                        "slot": self.selected_save_slot,
                     }
+                self.screen_mode = "character_select"
+                return None
 
-            if self.start_button_rect.collidepoint(event.pos):
+        elif event.type == pygame.MOUSEMOTION:
+            if self.detail_start_rect.collidepoint(event.pos):
+                self.detail_selected_btn = 0
+            elif self.detail_back_rect.collidepoint(event.pos):
+                self.detail_selected_btn = 1
+
+        elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if self.detail_start_rect.collidepoint(event.pos):
                 return {
                     "action": "new_game",
                     "character": self.characters[self.selected_idx],
+                    "slot": self.selected_save_slot,
                 }
-
-            if self.back_button_rect.collidepoint(event.pos):
-                self.screen_mode = "main"
+            if self.detail_back_rect.collidepoint(event.pos):
+                self.screen_mode = "character_select"
                 return None
 
         return None
@@ -834,6 +949,10 @@ class StartMenu:
 
         if self.screen_mode == "main":
             self._draw_main_screen(screen_w, screen_h)
+        elif self.screen_mode == "save_select":
+            self._draw_save_select_screen(screen_w, screen_h)
+        elif self.screen_mode == "character_detail":
+            self._draw_character_detail_screen(screen_w, screen_h)
         else:
             self._draw_character_select_screen(screen_w, screen_h)
 
@@ -912,6 +1031,127 @@ class StartMenu:
         )
         hint_rect = hint_surf.get_rect(center=(screen_w // 2, screen_h - 24))
         self.surface.blit(hint_surf, hint_rect)
+
+    def _draw_save_select_screen(self, screen_w: int, screen_h: int):
+        subtitle_surf = self.subtitle_font.render(
+            "Selecione um Slot de Save", True, (170, 178, 200)
+        )
+        subtitle_rect = subtitle_surf.get_rect(center=(screen_w // 2, 102))
+        self.surface.blit(subtitle_surf, subtitle_rect)
+
+        mouse_pos = pygame.mouse.get_pos()
+
+        for idx, save_data in enumerate(self.saves):
+            rect = self.save_card_rects[idx]
+            is_selected = idx == self.selected_slot_idx
+
+            if save_data is None:
+                accent = (15, 227, 208)
+                bg_color = (26, 30, 44) if is_selected else (20, 23, 33)
+                border_color = accent if is_selected else (60, 68, 90)
+            else:
+                char_info = save_data.get("character", {})
+                accent = tuple(char_info.get("accent_color", (15, 227, 208)))
+                bg_color = (30, 35, 50) if is_selected else (22, 25, 36)
+                border_color = accent if is_selected else (65, 72, 95)
+
+            pygame.draw.rect(self.surface, bg_color, rect, border_radius=14)
+            pygame.draw.rect(
+                self.surface,
+                border_color,
+                rect,
+                width=4 if is_selected else 2,
+                border_radius=14,
+            )
+
+            slot_title = self.card_font.render(
+                f"SLOT {idx + 1}", True, accent if is_selected else (190, 198, 215)
+            )
+            self.surface.blit(
+                slot_title, slot_title.get_rect(center=(rect.centerx, rect.y + 24))
+            )
+
+            if save_data is None:
+                empty_surf = self.subtitle_font.render("VAZIO", True, (130, 138, 160))
+                self.surface.blit(
+                    empty_surf,
+                    empty_surf.get_rect(center=(rect.centerx, rect.centery - 10)),
+                )
+                new_surf = self.hint_font.render(
+                    "Novo Jogo", True, accent if is_selected else (110, 118, 140)
+                )
+                self.surface.blit(
+                    new_surf,
+                    new_surf.get_rect(center=(rect.centerx, rect.centery + 22)),
+                )
+            else:
+                char_info = save_data.get("character", {})
+                char_id = char_info.get("id")
+                char_idx = next(
+                    (i for i, c in enumerate(self.characters) if c["id"] == char_id),
+                    0,
+                )
+
+                inner_rect = pygame.Rect(rect.x + 24, rect.y + 44, rect.width - 48, 128)
+                pygame.draw.rect(
+                    self.surface, (16, 18, 28), inner_rect, border_radius=10
+                )
+
+                frame_idx = self.frame_index if is_selected else 0
+                sprite = self.previews[char_idx][frame_idx]
+                self.surface.blit(sprite, sprite.get_rect(center=inner_rect.center))
+
+                char_name = char_info.get("name", "Personagem")
+                name_surf = self.card_font.render(char_name, True, (235, 240, 248))
+                self.surface.blit(
+                    name_surf,
+                    name_surf.get_rect(center=(rect.centerx, rect.bottom - 90)),
+                )
+
+                lvl = save_data.get("world", {}).get("current_level_idx", 0) + 1
+                lvl_surf = self.hint_font.render(f"Fase {lvl}", True, accent)
+                self.surface.blit(
+                    lvl_surf,
+                    lvl_surf.get_rect(center=(rect.centerx, rect.bottom - 62)),
+                )
+
+                del_rect = self.delete_button_rects[idx]
+                del_hover = del_rect.collidepoint(mouse_pos)
+                del_bg = (165, 45, 55) if del_hover else (95, 32, 38)
+                pygame.draw.rect(self.surface, del_bg, del_rect, border_radius=8)
+                pygame.draw.rect(
+                    self.surface, (215, 80, 90), del_rect, width=1, border_radius=8
+                )
+                del_surf = self.hint_font.render("EXCLUIR", True, (250, 235, 235))
+                self.surface.blit(del_surf, del_surf.get_rect(center=del_rect.center))
+
+        # Botão Voltar
+        pygame.draw.rect(
+            self.surface,
+            (38, 43, 60),
+            self.save_back_button_rect,
+            border_radius=10,
+        )
+        pygame.draw.rect(
+            self.surface,
+            (95, 105, 130),
+            self.save_back_button_rect,
+            width=2,
+            border_radius=10,
+        )
+        back_text = self.subtitle_font.render("VOLTAR", True, (220, 225, 235))
+        self.surface.blit(
+            back_text, back_text.get_rect(center=self.save_back_button_rect.center)
+        )
+
+        hint_surf = self.hint_font.render(
+            "[A/D] Selecionar Slot   |   [ENTER/Clique] Jogar   |   [DEL] Excluir   |   [ESC] Voltar",
+            True,
+            (140, 148, 170),
+        )
+        self.surface.blit(
+            hint_surf, hint_surf.get_rect(center=(screen_w // 2, screen_h - 22))
+        )
 
     def _draw_character_select_screen(self, screen_w: int, screen_h: int):
         subtitle_surf = self.subtitle_font.render(
@@ -1005,9 +1245,140 @@ class StartMenu:
         self.surface.blit(btn_text, btn_rect)
 
         hint_surf = self.hint_font.render(
-            "[A / D ou Setas] Selecionar   |   [ENTER] Iniciar   |   [ESC] Voltar",
+            "[A / D ou Setas] Selecionar   |   [ENTER] Avançar   |   [ESC] Voltar",
             True,
             (140, 148, 170),
         )
         hint_rect = hint_surf.get_rect(center=(screen_w // 2, screen_h - 22))
         self.surface.blit(hint_surf, hint_rect)
+
+    def _wrap_text(self, text: str, font: pygame.font.Font, max_width: int) -> list:
+        words = text.split()
+        lines = []
+        current = ""
+        for word in words:
+            test = f"{current} {word}".strip()
+            if font.size(test)[0] <= max_width:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    def _draw_character_detail_screen(self, screen_w: int, screen_h: int):
+        char = self.characters[self.selected_idx]
+        accent = char["accent_color"]
+
+        panel_w = min(820, screen_w - 60)
+        panel_h = min(500, screen_h - 150)
+        panel_rect = pygame.Rect(
+            (screen_w - panel_w) // 2,
+            100,
+            panel_w,
+            panel_h,
+        )
+        pygame.draw.rect(self.surface, (22, 26, 38), panel_rect, border_radius=14)
+        pygame.draw.rect(self.surface, accent, panel_rect, width=2, border_radius=14)
+
+        # Sprite do personagem à esquerda
+        frames = self.previews[self.selected_idx] if self.selected_idx < len(self.previews) else []
+        sprite_box = pygame.Rect(panel_rect.left + 28, panel_rect.top + 28, 120, 120)
+        pygame.draw.rect(self.surface, (16, 19, 28), sprite_box, border_radius=10)
+        pygame.draw.rect(self.surface, accent, sprite_box, width=2, border_radius=10)
+        if frames:
+            sprite = frames[self.frame_index % len(frames)]
+            scaled = pygame.transform.scale(sprite, (96, 96))
+            self.surface.blit(scaled, scaled.get_rect(center=sprite_box.center))
+
+        # Título e citação ao lado do sprite
+        text_left = sprite_box.right + 24
+        text_max_w = panel_rect.right - 28 - text_left
+
+        title_surf = self.subtitle_font.render(
+            char.get("title", char["name"]), True, accent
+        )
+        self.surface.blit(title_surf, (text_left, panel_rect.top + 28))
+
+        y_cursor = panel_rect.top + 66
+        for line in self._wrap_text(char.get("quote", ""), self.hint_font, text_max_w):
+            q_surf = self.hint_font.render(line, True, (200, 208, 225))
+            self.surface.blit(q_surf, (text_left, y_cursor))
+            y_cursor += 22
+
+        # História (lore) abaixo do bloco superior
+        lore_top = max(sprite_box.bottom + 22, y_cursor + 12)
+        lore_max_w = panel_rect.width - 56
+        for line in self._wrap_text(char.get("lore", ""), self.hint_font, lore_max_w):
+            if lore_top > panel_rect.bottom - 115:
+                break
+            l_surf = self.hint_font.render(line, True, (225, 230, 240))
+            self.surface.blit(l_surf, (panel_rect.left + 28, lore_top))
+            lore_top += 24
+
+        # Afinidade e Fraqueza
+        affinity = char.get("affinity", "-")
+        weakness = char.get("weakness", "-")
+        stats_surf = self.hint_font.render(
+            f"Afinidade: {affinity}   |   Fraqueza: {weakness}",
+            True,
+            accent,
+        )
+        self.surface.blit(
+            stats_surf,
+            stats_surf.get_rect(center=(panel_rect.centerx, panel_rect.bottom - 88)),
+        )
+
+        # Botões Voltar e Iniciar Jogo
+        btn_y = panel_rect.bottom - 64
+        self.detail_back_rect = pygame.Rect(panel_rect.centerx - 230, btn_y, 200, 46)
+        self.detail_start_rect = pygame.Rect(panel_rect.centerx + 30, btn_y, 200, 46)
+
+        back_sel = self.detail_selected_btn == 1
+        pygame.draw.rect(
+            self.surface,
+            (46, 52, 72) if back_sel else (32, 36, 50),
+            self.detail_back_rect,
+            border_radius=10,
+        )
+        pygame.draw.rect(
+            self.surface,
+            accent if back_sel else (80, 88, 110),
+            self.detail_back_rect,
+            width=2,
+            border_radius=10,
+        )
+        back_lbl = self.subtitle_font.render("VOLTAR", True, (230, 235, 245))
+        self.surface.blit(back_lbl, back_lbl.get_rect(center=self.detail_back_rect.center))
+
+        start_sel = self.detail_selected_btn == 0
+        pygame.draw.rect(
+            self.surface,
+            accent if start_sel else (32, 36, 50),
+            self.detail_start_rect,
+            border_radius=10,
+        )
+        pygame.draw.rect(
+            self.surface,
+            accent,
+            self.detail_start_rect,
+            width=2,
+            border_radius=10,
+        )
+        start_lbl = self.subtitle_font.render(
+            "INICIAR", True, (12, 14, 20) if start_sel else (230, 235, 245)
+        )
+        self.surface.blit(
+            start_lbl, start_lbl.get_rect(center=self.detail_start_rect.center)
+        )
+
+        hint_surf = self.hint_font.render(
+            "[A / D] Alternar   |   [ENTER] Confirmar   |   [ESC] Voltar",
+            True,
+            (140, 148, 170),
+        )
+        self.surface.blit(
+            hint_surf, hint_surf.get_rect(center=(screen_w // 2, screen_h - 22))
+        )

@@ -9,7 +9,8 @@ from config import (
     MAP_WIDTH,
     MAP_HEIGHT,
     MIN_LEAF_SIZE,
-    MIN_DOOR_DISTANCE_TILES
+    MIN_DOOR_DISTANCE_TILES,
+    OBSTACLE_SPAWN_CHANCE,
 )
 from maps_generator.mapGenerator import MapGenerator
 from maps_generator.bsp import Bsp
@@ -784,10 +785,153 @@ class MapService:
                 rng
             )
 
+        forbidden_positions = set()
+        if spawn_position is not None:
+            forbidden_positions.add(spawn_position)
+        if entrance is not None:
+            forbidden_positions.add(entrance["floor"])
+        if exit_door is not None:
+            forbidden_positions.add(exit_door["floor"])
+
+        obstacles, obstacle_effects = MapService.generate_obstacles(
+            floors=floors,
+            tile_size=tile_size,
+            rng=rng,
+            forbidden_positions=forbidden_positions,
+            spawn_chance=OBSTACLE_SPAWN_CHANCE,
+        )
+
         return (
             floors,
             walls,
+            obstacles,
+            obstacle_effects,
             entrance,
             exit_door,
             spawn_position
         )
+
+    @staticmethod
+    def generate_obstacles(
+        floors,
+        tile_size: int,
+        rng: random.Random,
+        forbidden_positions: set,
+        spawn_chance: float = 0.02,
+    ) -> tuple[List[pygame.Rect], List[dict]]:
+        """
+        Gera obstáculos esparsos apenas em áreas bem abertas (anel 5x5 de chão),
+        garantindo que o jogador consiga contornar o obstáculo e seus efeitos
+        sem sofrer dano. Os efeitos ao redor têm tamanhos aleatórios.
+        """
+        floor_positions = {(rect.x, rect.y) for rect in floors}
+        neighbors_offsets = [
+            (-tile_size, -tile_size), (0, -tile_size), (tile_size, -tile_size),
+            (-tile_size, 0),                           (tile_size, 0),
+            (-tile_size, tile_size),  (0, tile_size),  (tile_size, tile_size),
+        ]
+
+        # Exige uma área aberta 5x5 (distância de 2 tiles em todas as direções)
+        area_5x5_offsets = [
+            (dx * tile_size, dy * tile_size)
+            for dy in range(-2, 3)
+            for dx in range(-2, 3)
+            if not (dx == 0 and dy == 0)
+        ]
+
+        # Distância mínima entre obstáculos para evitar barreiras de efeitos
+        spacing_offsets = [
+            (dx * tile_size, dy * tile_size)
+            for dy in range(-3, 4)
+            for dx in range(-3, 4)
+            if not (dx == 0 and dy == 0)
+        ]
+
+        open_candidates = []
+        for fx, fy in sorted(floor_positions):
+            if (fx, fy) in forbidden_positions:
+                continue
+            # Não coloca obstáculo nem efeito colado em pontos proibidos (portas/spawn)
+            if any((fx + dx, fy + dy) in forbidden_positions for dx, dy in neighbors_offsets):
+                continue
+            if all((fx + dx, fy + dy) in floor_positions for dx, dy in area_5x5_offsets):
+                open_candidates.append((fx, fy))
+
+        obstacles = []
+        placed_positions = set()
+
+        for fx, fy in open_candidates:
+            if any((fx + dx, fy + dy) in placed_positions for dx, dy in spacing_offsets):
+                continue
+
+            if rng.random() < spawn_chance:
+                placed_positions.add((fx, fy))
+                obstacles.append(pygame.Rect(fx, fy, tile_size, tile_size))
+
+        # Garante ao menos 1 obstáculo mesmo em mapas mais fechados
+        if not obstacles:
+            fallback_pos = None
+            if open_candidates:
+                fallback_pos = rng.choice(open_candidates)
+            else:
+                area_3x3_candidates = [
+                    (fx, fy)
+                    for fx, fy in sorted(floor_positions)
+                    if (fx, fy) not in forbidden_positions
+                    and not any((fx + dx, fy + dy) in forbidden_positions for dx, dy in neighbors_offsets)
+                    and all((fx + dx, fy + dy) in floor_positions for dx, dy in neighbors_offsets)
+                ]
+                if area_3x3_candidates:
+                    fallback_pos = rng.choice(area_3x3_candidates)
+                else:
+                    any_floor = [
+                        (fx, fy)
+                        for fx, fy in sorted(floor_positions)
+                        if (fx, fy) not in forbidden_positions
+                    ]
+                    if any_floor:
+                        fallback_pos = rng.choice(any_floor)
+
+            if fallback_pos is not None:
+                placed_positions.add(fallback_pos)
+                obstacles.append(
+                    pygame.Rect(fallback_pos[0], fallback_pos[1], tile_size, tile_size)
+                )
+
+        obstacle_effects = []
+        effect_positions = set()
+        # O sprite de efeito é orientado com o obstáculo abaixo (0, -tile_size -> 0°).
+        # pygame.transform.rotate gira no sentido anti-horário.
+        effect_angles = {
+            (0, -tile_size): 0,
+            (-tile_size, -tile_size): 45,
+            (-tile_size, 0): 90,
+            (-tile_size, tile_size): 135,
+            (0, tile_size): 180,
+            (tile_size, tile_size): 225,
+            (tile_size, 0): 270,
+            (tile_size, -tile_size): 315,
+        }
+        for obs in obstacles:
+            for dx, dy in neighbors_offsets:
+                ex, ey = obs.x + dx, obs.y + dy
+                pos = (ex, ey)
+                if (
+                    pos in floor_positions
+                    and pos not in placed_positions
+                    and pos not in effect_positions
+                ):
+                    effect_positions.add(pos)
+                    scale = rng.uniform(0.55, 0.95)
+                    size = max(16, int(tile_size * scale))
+                    margin = tile_size - size
+                    offset_x = rng.randint(0, margin) if margin > 0 else 0
+                    offset_y = rng.randint(0, margin) if margin > 0 else 0
+                    obstacle_effects.append({
+                        "rect": pygame.Rect(ex + offset_x, ey + offset_y, size, size),
+                        "obstacle_rect": obs,
+                        "initial_frame": rng.choice([0, 1]),
+                        "angle": effect_angles[(dx, dy)],
+                    })
+
+        return obstacles, obstacle_effects

@@ -4,7 +4,7 @@ import sys
 import pygame
 from pygame.locals import QUIT
 
-from config import WIDTH, HEIGHT, FPS, TILE_SIZE, CHARACTER_OPTIONS
+from config import WIDTH, HEIGHT, FPS, TILE_SIZE, CHARACTER_OPTIONS, EFFECT_DURATION_MS
 from entities import Player
 from collisions import CollisionManager
 from rendering import GameRenderer, Camera, StartMenu, PauseMenu, SettingsMenu
@@ -37,7 +37,7 @@ class Game:
         self.menu = StartMenu(
             self.screen,
             settings_menu=self.settings_menu,
-            saved_game=SaveManager.load_game(),
+            saves=SaveManager.list_saves(),
         )
         self.pause_menu = PauseMenu(self.screen, self.settings_menu)
         self.camera = Camera(
@@ -48,6 +48,7 @@ class Game:
         self.player = Player()
         self.state = "menu"
         self.selected_character = None
+        self.current_save_slot = 1
 
         self.master_seed = random.random()
         self.rng = random.Random(self.master_seed)
@@ -61,6 +62,10 @@ class Game:
 
         self.floors = []
         self.walls = []
+        self.obstacles = []
+        self.obstacle_effects = []
+        self.active_screen_effect = None
+        self.effect_expires_at = 0
 
         self.entrance_door = None
         self.exit_door = None
@@ -69,6 +74,9 @@ class Game:
         self.levels_history = []
         self.current_level_idx = -1
         self.map_view_dismissed = False
+        self.map_preview_idx = None
+        self.preview_data = None
+        self.map_transition = None
 
     def _get_next_map_type(self, exclude=None):
         """
@@ -96,7 +104,6 @@ class Game:
         self.available_map_types = [0, 1, 2, 3]
         self.levels_history.clear()
         self.renderer.explored_tiles_by_level.clear()
-        self.renderer.tile_rotations.clear()
         self.renderer.transition_mask.clear()
 
         if initial_map_type is not None and initial_map_type in self.available_map_types:
@@ -139,7 +146,7 @@ class Game:
         self.save_current_game()
 
     def save_current_game(self):
-        """Persiste o estado atual da partida localmente."""
+        """Persiste o estado atual da partida localmente no slot ativo."""
         if self.selected_character is None or not self.levels_history:
             return
         SaveManager.save_game(
@@ -150,11 +157,12 @@ class Game:
             levels_history=self.levels_history,
             current_level_idx=self.current_level_idx,
             explored_tiles_by_level=self.renderer.explored_tiles_by_level,
+            slot=self.current_save_slot,
         )
 
-    def load_saved_game(self) -> bool:
-        """Restaura uma partida salva localmente."""
-        save_data = SaveManager.load_game()
+    def load_saved_game(self, slot: int = 1) -> bool:
+        """Restaura uma partida salva localmente do slot informado."""
+        save_data = SaveManager.load_game(slot)
         if not save_data:
             return False
 
@@ -167,6 +175,7 @@ class Game:
         )
         self.selected_character = matched_char
         self.renderer.set_player_sprite(matched_char["sprite_path"])
+        self.renderer.set_player_theme(matched_char.get("theme_map", 0))
 
         world = save_data["world"]
         self.master_seed = world.get("master_seed", random.random())
@@ -178,7 +187,6 @@ class Game:
         if not self.levels_history or not (0 <= self.current_level_idx < len(self.levels_history)):
             return False
 
-        self.renderer.tile_rotations.clear()
         self.renderer.transition_mask.clear()
         self.renderer.explored_tiles_by_level.clear()
 
@@ -220,6 +228,8 @@ class Game:
         (
             self.floors,
             self.walls,
+            self.obstacles,
+            self.obstacle_effects,
             self.entrance_door,
             self.exit_door,
             spawn_position
@@ -555,6 +565,85 @@ class Game:
 
         SaveManager.save_settings(self.window_width, self.window_height, self.fps)
 
+    def _get_active_map_snapshot(self) -> dict:
+        """Retorna os dados do mapa atualmente exibido no TAB para animar a transição."""
+        if self.preview_data is not None:
+            return {
+                **self.preview_data,
+                "idx": self.map_preview_idx,
+                "draw_player_marker": False,
+            }
+        return {
+            "floors": self.floors,
+            "walls": self.walls,
+            "obstacles": self.obstacles,
+            "entrance_door": self.entrance_door,
+            "exit_door": self.exit_door,
+            "camera": self.camera,
+            "level": self.levels_history[self.current_level_idx],
+            "idx": self.current_level_idx,
+            "draw_player_marker": True,
+        }
+
+    def _start_map_slide_transition(self, target_idx: int, direction: str):
+        from_data = self._get_active_map_snapshot()
+        self._load_preview_level(target_idx)
+        to_data = self._get_active_map_snapshot()
+        self.map_transition = {
+            "from_data": from_data,
+            "to_data": to_data,
+            "direction": direction,
+            "start_time": pygame.time.get_ticks(),
+            "duration": 650,
+        }
+
+    def _load_preview_level(self, level_idx: int):
+        """Carrega apenas a geometria de um nível do histórico para pré-visualização no TAB."""
+        self.map_preview_idx = level_idx
+        if level_idx == self.current_level_idx:
+            self.preview_data = None
+            return
+
+        level = self.levels_history[level_idx]
+        if level["type"] == "pure":
+            mapa = MapService.generate_map(level["algorithm"], level["seed"])
+            geometry_seed = level["seed"]
+            spawn_info = None
+        else:
+            mapa, spawn_info = MapService.generate_intermediate_map(
+                algorithm_a=level["algorithm_a"],
+                algorithm_b=level["algorithm_b"],
+                seed_a=level["seed_a"],
+                seed_b=level["seed_b"],
+                layout=level["layout"],
+                reverse=level["reverse"],
+            )
+            geometry_seed = level["geometry_seed"]
+
+        floors, walls, _, _, entrance_door, exit_door, _ = MapService.load_geometry(
+            mapa,
+            TILE_SIZE,
+            geometry_seed,
+            spawn_info=spawn_info,
+            entrance_side=level.get("entrance_side"),
+            exit_side=level.get("exit_side"),
+            spawn_side=level.get("spawn_side"),
+        )
+        preview_camera = Camera(
+            viewport_width=self.window_width,
+            viewport_height=self.window_height,
+            map_width=mapa.width * TILE_SIZE,
+            map_height=mapa.height * TILE_SIZE,
+        )
+        self.preview_data = {
+            "floors": floors,
+            "walls": walls,
+            "entrance_door": entrance_door,
+            "exit_door": exit_door,
+            "camera": preview_camera,
+            "level": level,
+        }
+
     def handle_events(self):
         for event in pygame.event.get():
             if event.type == QUIT:
@@ -572,13 +661,22 @@ class Game:
                 )
                 if menu_result is not None:
                     action = menu_result.get("action")
-                    if action == "continue":
-                        if self.load_saved_game():
+                    if action == "load_slot":
+                        slot = menu_result["slot"]
+                        self.current_save_slot = slot
+                        if self.load_saved_game(slot):
                             self.state = "playing"
+                    elif action == "delete_slot":
+                        SaveManager.delete_save(menu_result["slot"])
+                        self.menu.refresh_saves(
+                            SaveManager.list_saves(), reset_to_main=False
+                        )
                     elif action == "new_game":
                         chosen_character = menu_result["character"]
+                        self.current_save_slot = menu_result.get("slot", 1)
                         self.selected_character = chosen_character
                         self.renderer.set_player_sprite(chosen_character["sprite_path"])
+                        self.renderer.set_player_theme(chosen_character.get("theme_map", 0))
                         self._start_game(initial_map_type=chosen_character.get("theme_map"))
                         self.state = "playing"
                     elif action == "apply_settings":
@@ -592,9 +690,50 @@ class Game:
                         sys.exit()
 
             elif self.state == "playing":
-                if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-                    self.pause_menu.reset()
-                    self.state = "paused"
+                if event.type == pygame.KEYDOWN:
+                    if event.key == pygame.K_ESCAPE:
+                        self.pause_menu.reset()
+                        self.state = "paused"
+                    elif pygame.key.get_pressed()[pygame.K_TAB]:
+                        key_to_side = {
+                            pygame.K_w: "top",
+                            pygame.K_UP: "top",
+                            pygame.K_s: "bottom",
+                            pygame.K_DOWN: "bottom",
+                            pygame.K_a: "left",
+                            pygame.K_LEFT: "left",
+                            pygame.K_d: "right",
+                            pygame.K_RIGHT: "right",
+                        }
+                        chosen_side = key_to_side.get(event.key)
+                        if chosen_side is not None:
+                            active_idx = (
+                                self.map_preview_idx
+                                if self.map_preview_idx is not None
+                                else self.current_level_idx
+                            )
+                            active_entrance = (
+                                self.preview_data["entrance_door"]
+                                if self.preview_data is not None
+                                else self.entrance_door
+                            )
+                            active_exit = (
+                                self.preview_data["exit_door"]
+                                if self.preview_data is not None
+                                else self.exit_door
+                            )
+                            if (
+                                active_entrance is not None
+                                and chosen_side == active_entrance.get("side")
+                                and active_idx > 0
+                            ):
+                                self._start_map_slide_transition(active_idx - 1, chosen_side)
+                            elif (
+                                active_exit is not None
+                                and chosen_side == active_exit.get("side")
+                                and active_idx + 1 < len(self.levels_history)
+                            ):
+                                self._start_map_slide_transition(active_idx + 1, chosen_side)
 
             elif self.state == "paused":
                 pause_result = self.pause_menu.handle_event(
@@ -615,7 +754,7 @@ class Game:
                         )
                     elif action == "main_menu":
                         self.save_current_game()
-                        self.menu.refresh_save_state(SaveManager.load_game())
+                        self.menu.refresh_saves(SaveManager.list_saves())
                         self.state = "menu"
 
     def update_player(self, keys):
@@ -638,11 +777,30 @@ class Game:
 
         if not self.collision_manager.check_wall_collision(
             candidate_rect,
-            collision_walls
+            collision_walls + self.obstacles
         ):
             self.player.set_position(target_x, target_y)
 
         current_player_rect = self.player.get_rect()
+
+        # Verifica contato do jogador com os efeitos ao redor dos obstáculos
+        now = pygame.time.get_ticks()
+        current_level = self.levels_history[self.current_level_idx]
+        touching_effect = None
+        for effect in self.obstacle_effects:
+            if current_player_rect.colliderect(effect["rect"]):
+                touching_effect = self.renderer.get_algorithm_at_rect(
+                    effect.get("obstacle_rect", effect["rect"]),
+                    self.camera,
+                    current_level,
+                )
+                break
+
+        if touching_effect is not None:
+            self.active_screen_effect = touching_effect
+            self.effect_expires_at = now + EFFECT_DURATION_MS
+        elif self.active_screen_effect is not None and now >= self.effect_expires_at:
+            self.active_screen_effect = None
 
         # =========================================================
         # EXIT → avança de nível
@@ -713,33 +871,67 @@ class Game:
                     self.camera,
                     show_full_map=False,
                     flip_display=False,
+                    obstacles=self.obstacles,
+                    obstacle_effects=self.obstacle_effects,
+                    active_screen_effect=self.active_screen_effect,
                 )
                 self.pause_menu.draw()
                 continue
 
             keys = pygame.key.get_pressed()
-            self.update_player(keys)
+            show_full_map = bool(keys[pygame.K_TAB])
+
+            if not show_full_map:
+                self.map_preview_idx = None
+                self.preview_data = None
+                self.map_transition = None
+                self.update_player(keys)
             self.camera.update(self.player.x, self.player.y)
 
-            if not keys[pygame.K_TAB]:
-                self.map_view_dismissed = False
-                show_full_map = False
-            else:
-                if self.player.is_moving:
-                    self.map_view_dismissed = True
-                show_full_map = not self.map_view_dismissed
+            if show_full_map and self.map_transition is not None:
+                elapsed = pygame.time.get_ticks() - self.map_transition["start_time"]
+                duration = self.map_transition["duration"]
+                if elapsed < duration:
+                    self.renderer.render_map_slide_transition(
+                        self.map_transition["from_data"],
+                        self.map_transition["to_data"],
+                        self.map_transition["direction"],
+                        elapsed / duration,
+                        self.player,
+                        self.current_level_idx,
+                    )
+                    continue
+                self.map_transition = None
 
-            self.renderer.render_frame(
-                self.floors,
-                self.walls,
-                self.player,
-                self.exit_door,
-                self.entrance_door,
-                self.current_level_idx,
-                self.levels_history[self.current_level_idx],
-                self.camera,
-                show_full_map=show_full_map
-            )
+            if show_full_map and self.preview_data is not None:
+                self.renderer.render_frame(
+                    self.preview_data["floors"],
+                    self.preview_data["walls"],
+                    self.player,
+                    self.preview_data["exit_door"],
+                    self.preview_data["entrance_door"],
+                    self.map_preview_idx,
+                    self.preview_data["level"],
+                    self.preview_data["camera"],
+                    show_full_map=True,
+                    draw_player_marker=False,
+                )
+            else:
+                self.renderer.render_frame(
+                    self.floors,
+                    self.walls,
+                    self.player,
+                    self.exit_door,
+                    self.entrance_door,
+                    self.current_level_idx,
+                    self.levels_history[self.current_level_idx],
+                    self.camera,
+                    show_full_map=show_full_map,
+                    obstacles=self.obstacles,
+                    obstacle_effects=self.obstacle_effects,
+                    active_screen_effect=self.active_screen_effect,
+                    draw_player_marker=True,
+                )
 
 if __name__ == "__main__":
     game = Game()

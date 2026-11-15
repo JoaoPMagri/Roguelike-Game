@@ -48,8 +48,8 @@ def get_save_dir() -> str:
     return save_dir
 
 
-def get_save_file_path() -> str:
-    return os.path.join(get_save_dir(), "savegame.json")
+def get_save_file_path(slot: int = 1) -> str:
+    return os.path.join(get_save_dir(), f"save_slot_{slot}.json")
 
 
 def get_settings_file_path() -> str:
@@ -58,11 +58,33 @@ def get_settings_file_path() -> str:
 
 class SaveManager:
     SAVE_VERSION = 1
+    MAX_SLOTS = 4
 
     @staticmethod
-    def has_save() -> bool:
-        path = get_save_file_path()
+    def has_save(slot: int = 1) -> bool:
+        path = get_save_file_path(slot)
         return os.path.isfile(path)
+
+    @staticmethod
+    def list_saves() -> list[Optional[dict]]:
+        """Retorna uma lista com os dados dos 4 slots de save (ou None para vazios)."""
+        return [
+            SaveManager.load_game(slot)
+            for slot in range(1, SaveManager.MAX_SLOTS + 1)
+        ]
+
+    @staticmethod
+    def delete_save(slot: int) -> bool:
+        """Exclui o arquivo de save do slot informado."""
+        path = get_save_file_path(slot)
+        if not os.path.isfile(path):
+            return False
+        try:
+            os.remove(path)
+            return True
+        except OSError as exc:
+            print(f"Erro ao excluir save do slot {slot}: {exc}")
+            return False
 
     @staticmethod
     def save_game(
@@ -74,6 +96,7 @@ class SaveManager:
         current_level_idx: int,
         explored_tiles_by_level: dict = None,
         extra_data: dict = None,
+        slot: int = 1,
     ) -> bool:
         """
         Salva o estado completo da partida em JSON de forma atômica.
@@ -115,7 +138,7 @@ class SaveManager:
             },
         }
 
-        save_path = get_save_file_path()
+        save_path = get_save_file_path(slot)
         temp_path = save_path + ".tmp"
 
         try:
@@ -128,9 +151,9 @@ class SaveManager:
             return False
 
     @staticmethod
-    def load_game() -> Optional[dict]:
-        """Carrega os dados salvos localmente ou retorna None se não existir/inválido."""
-        save_path = get_save_file_path()
+    def load_game(slot: int = 1) -> Optional[dict]:
+        """Carrega os dados salvos localmente do slot ou retorna None se não existir/inválido."""
+        save_path = get_save_file_path(slot)
         if not os.path.isfile(save_path):
             return None
 
