@@ -168,14 +168,15 @@ class SaveManager:
             return None
 
     @staticmethod
-    def save_settings(width: int, height: int, fps: int) -> bool:
-        """Salva localmente as configurações de janela e FPS."""
+    def save_settings(width: int, height: int, fps: int, volume: float = 0.5) -> bool:
+        """Salva localmente as configurações de janela, FPS e volume."""
         settings_path = get_settings_file_path()
         temp_path = settings_path + ".tmp"
         payload = {
             "width": int(width),
             "height": int(height),
             "fps": int(fps),
+            "volume": float(volume),
         }
         try:
             with open(temp_path, "w", encoding="utf-8") as f:
@@ -187,7 +188,12 @@ class SaveManager:
             return False
 
     @staticmethod
-    def load_settings(default_width: int, default_height: int, default_fps: int) -> dict:
+    def load_settings(
+        default_width: int,
+        default_height: int,
+        default_fps: int,
+        default_volume: float = 0.5,
+    ) -> dict:
         """Carrega as configurações salvas ou retorna os valores padrão."""
         settings_path = get_settings_file_path()
         if not os.path.isfile(settings_path):
@@ -195,6 +201,7 @@ class SaveManager:
                 "width": default_width,
                 "height": default_height,
                 "fps": default_fps,
+                "volume": default_volume,
             }
         try:
             with open(settings_path, "r", encoding="utf-8") as f:
@@ -203,11 +210,13 @@ class SaveManager:
                 "width": int(data.get("width", default_width)),
                 "height": int(data.get("height", default_height)),
                 "fps": int(data.get("fps", default_fps)),
+                "volume": float(data.get("volume", default_volume)),
             }
         except (OSError, ValueError, json.JSONDecodeError):
             return {
                 "width": default_width,
                 "height": default_height,
                 "fps": default_fps,
+                "volume": default_volume,
             }
 
