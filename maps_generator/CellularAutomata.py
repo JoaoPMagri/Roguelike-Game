@@ -141,7 +141,7 @@ class CellularAutomata(MapGenerator):
         for i in range(len(points)-1):
             super().connect_points(points[i],points[i+1])
         
-        print(regiao)
+        #print(regiao)
     
     # ============================================================
     # KEEP LARGEST REGION

@@ -71,3 +71,6 @@ venv.bak/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Saves locais
+saves/
